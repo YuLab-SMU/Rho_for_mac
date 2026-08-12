@@ -8,6 +8,9 @@ this file records behavior included in a versioned build candidate.
 
 ### Fixed
 
+- Background project refreshes no longer recenter the Monaco editor on its
+  saved cursor or selection after the user scrolls elsewhere. Explicit file
+  activation and source navigation continue to reveal and focus their target.
 - Cross-platform candidate validation now verifies Provider-discovery timeout
   handling against a server that cannot return a competing successful model
   list. This removes a scheduler-sensitive CI race while retaining the same

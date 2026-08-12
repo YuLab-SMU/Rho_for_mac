@@ -72,10 +72,16 @@ macOS/Windows stable/MSRV identities; public policy deployment run
 attribution needed official links, the Download URL needed an explicit
 truthful pending-application disclosure, and executable uninstall instructions
 needed to be visible on the README/download page; PR #46 carries that bounded
-SP-READY1 conformance follow-up and its regression enforcement. Organization-
-owner MFA audit, SignPath application/approval, GitHub App configuration,
-production two-stage Windows signing, candidate construction, installed
-acceptance, MAC5, and publication remain open. The
+SP-READY1 conformance follow-up and its regression enforcement and
+protected-integrated at `71dfd3a`; public-site regeneration and live
+verification remain open. The Issue #33 `EDITOR-VIEWPORT-R1` amendment now
+prevents background project refresh from revealing the saved Monaco selection
+and revoking a newer reading position. Its local implementation, complete
+affected validation, review, and `dev.33` NEWS reconciliation pass; exact
+hosted validation and protected integration remain open. Organization-owner
+MFA audit, SignPath application/approval, GitHub App configuration, production
+two-stage Windows signing, candidate construction, installed acceptance, MAC5,
+and publication remain open. The
 exact timeout regression passed 51 local executions; the locked Rust
 workspace, frontend/release contracts, both R packages, release dry runs, and
 independent production-boundary review pass.

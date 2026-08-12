@@ -4884,7 +4884,10 @@ function updateEditorChrome() {
   renderEnvironmentSummary();
 }
 
-function applyDocumentSelection(documentState, { focusEditor = true } = {}) {
+function applyDocumentSelection(
+  documentState,
+  { focusEditor = true, revealSelection = focusEditor } = {},
+) {
   if (!documentState) return;
   if (state.editor.mode === "monaco" && state.editor.editor) {
     const model = ensureDocumentModel(documentState);
@@ -4901,9 +4904,9 @@ function applyDocumentSelection(documentState, { focusEditor = true } = {}) {
       endLineNumber: end.lineNumber,
       endColumn: end.column,
     });
-    state.editor.editor.revealPositionInCenterIfOutsideViewport(end);
-    // Focus is caller-owned. Modal state is only a final guard against an
-    // explicit focus request landing behind an open dialog.
+    if (revealSelection) state.editor.editor.revealPositionInCenterIfOutsideViewport(end);
+    // Focus and reveal are caller-owned. Modal state is only a final guard
+    // against an explicit focus request landing behind an open dialog.
     if (focusEditor && !modalDialogIsOpen()) state.editor.editor.focus();
   } else {
     const editor = fallbackEditor();

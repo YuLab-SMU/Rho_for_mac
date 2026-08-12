@@ -4,18 +4,22 @@ Status: active replacement source contract; deterministic Provider-discovery
 repair, file-lane test repair, AGPL LIC-1, and LIC-2 are protected-integrated;
 SP-READY1 SignPath repository readiness, hosted validation, integration,
 public policy deployment, private reporting, and default-branch rules pass;
-owner MFA audit, external application/GitHub App configuration, exact
-candidate, installed acceptance, Windows signing, MAC5, publication, and
-candidate updater evidence remain open
+PR #46 protected integration and EDITOR-VIEWPORT-R1 local implementation,
+affected validation, and review pass; public-guidance deployment verification,
+Issue #33 hosted integration, owner MFA audit, external application/GitHub App
+configuration, exact candidate, installed acceptance, Windows signing, MAC5,
+publication, and candidate updater evidence remain open
 
 Date: 2026-08-11
 Last updated: 2026-08-12
 
-Change class: D1 correction of a nondeterministic test fixture plus the
-required D4 single-use replacement development identity
+Change class: D1 correction of a nondeterministic test fixture and a bounded
+editor-viewport defect plus the required D4 single-use replacement development
+identity
 
-Risk: R1 for test-only timeout-fixture behavior; R4 for hosted candidate,
-signing/notarization, Release, update site, or publication action
+Risk: R1 for test-only timeout-fixture and local editor-viewport behavior; R4
+for hosted candidate, signing/notarization, Release, update site, or
+publication action
 
 Owning documents: CRED-UX3 owns the production Provider-discovery timeout,
 bounds, redaction, and error classes. CRED-UX3-R1 owns only deterministic
@@ -24,6 +28,11 @@ the installed editor-envelope correction carried forward from rejected
 `dev.32`. The macOS arm64 specification owns packaging and trust gates. This
 checklist alone owns the exact `0.4.0-dev.33` source identity and any future
 candidate, installed, MAC5, publication, or updater evidence.
+
+The active Issue #33 focus-stability specification owns
+`EDITOR-VIEWPORT-R1`: background selection synchronization may not focus or
+reveal the Monaco selection, while explicit navigation retains both
+authorities. It changes no candidate workflow or release authority.
 
 Authorization: after reviewing candidate run `31552396659`, its exact failure,
 and the focused repair plan, the project owner explicitly instructed
@@ -50,6 +59,13 @@ ownership surfaces required before a SignPath application, validate them, and
 stop at protected integration/external readiness. It does not authorize a
 candidate or represent SignPath approval.
 
+After reviewing the remaining Issue #33 reproduction, the project owner
+explicitly instructed the agent to start the bounded viewport repair on
+2026-08-12. This authorizes local source implementation, regression coverage,
+complete affected validation, review, documentation reconciliation, and a
+scoped commit. Protected push/integration and every candidate or publication
+action remain separate gates.
+
 `0.4.0-dev.32` is immutable and rejected. Its Windows artifact, source checks,
 and failed macOS candidate result cannot be relabelled or composed into this
 identity.
@@ -64,7 +80,7 @@ identity.
 | Store schema | `12` | unchanged; no persistence schema changes |
 | Release tag/name | `v0.4.0-dev.33` / `Rho 0.4.0-dev.33` | reserved replacement identity only; no tag, artifact, or Release exists |
 | Source repository | `YuLab-SMU/Rho` | authoritative integration target |
-| Candidate source | future exact upstream default-branch commit after external signing readiness and production signing integration | upstream `main` `e6fec3ecc286db93aa38c227e896ef077bdf17bd` contains the integrated source repairs, AGPL LIC-1/LIC-2, and SP-READY1; no candidate exists |
+| Candidate source | future exact upstream default-branch commit after external signing readiness and production signing integration | upstream `main` `71dfd3a442a3a22abacd8a49e400ff8deae1760a` contains the integrated source repairs, AGPL LIC-1/LIC-2, SP-READY1, and PR #46; EDITOR-VIEWPORT-R1 remains a locally verified source amendment pending protected integration; no candidate exists |
 | Windows/macOS artifacts | exact `dev.33` candidate only | not built |
 | Release decision | source repair authorized; release `NO-GO` | every downstream artifact and acceptance gate remains open |
 
@@ -122,6 +138,15 @@ proving production Provider-discovery code is unchanged. Review also found no
 new dependency, schema, credential, network, persistence, project, execution,
 UI, or mutation authority and no blocking contract deviation.
 
+EDITOR-VIEWPORT-R1 adds a caller-owned reveal intent at the existing Monaco
+selection boundary. Its regression first failed on the unconditional
+background reveal, then passed after the repair. JavaScript syntax, all 60
+frontend contracts, locked Rust format/check and 365 workspace tests, both R
+package suites with 695 combined expectations, and `git diff --check` pass.
+Post-verification caller review found no explicit navigation path losing reveal
+authority and no backend, mock-command, dependency, schema, persistence,
+credential, project, execution, or filesystem change.
+
 ## Required Source Evidence
 
 1. **PASS** — the focused timeout regression passes 51 consecutive local
@@ -147,12 +172,17 @@ UI, or mutation authority and no blocking contract deviation.
    vulnerability reporting, and no-bypass default-branch ruleset `20728497`
    pass without creating a candidate or changing the published `dev.24`
    development manifest identity.
-8. **IN REVIEW** — PR #46 records the integrated evidence and closes two
-   application-form conformance gaps with linked SignPath attribution plus
-   an explicit pending-application disclosure, visible Windows/macOS uninstall
-   instructions, and negative regression coverage. Protected integration,
-   regenerated-site deployment, and live verification remain open and cannot
-   be preclaimed.
+8. **SOURCE PASS / DEPLOYMENT OPEN** — PR #46 records the integrated evidence
+   and closes two application-form conformance gaps with linked SignPath
+   attribution plus an explicit pending-application disclosure, visible
+   Windows/macOS uninstall instructions, and negative regression coverage. It
+   protected-integrated as `71dfd3a442a3a22abacd8a49e400ff8deae1760a`;
+   regenerated-site deployment and live verification remain open and cannot be
+   preclaimed.
+9. **LOCAL PASS / HOSTED OPEN** — EDITOR-VIEWPORT-R1 implementation, focused
+   failing regression, all affected local validation, NEWS reconciliation, and
+   post-verification review pass. Exact hosted-head validation and protected
+   integration remain open; no candidate or installed acceptance is claimed.
 
 Pre-merge update-site review found that making `license_boundary` globally
 mandatory also rejected immutable published `0.4.0-dev.24` evidence and would
@@ -172,27 +202,30 @@ trigger that matrix, and stable jobs must execute the update-site self-test.
 2. **PASS** — implement and integrate SP-READY1, publish its policy links,
    enable private vulnerability reporting, and apply a no-bypass default-
    branch review ruleset.
-3. Protected-integrate PR #46, regenerate the public site, and verify its
-   linked policy and visible uninstall guidance.
-4. Obtain organization-owner MFA verification, submit and receive the SignPath
+3. **SOURCE PASS** — protected-integrate PR #46 as
+   `71dfd3a442a3a22abacd8a49e400ff8deae1760a`; regenerate the public site
+   and verify its linked policy and visible uninstall guidance.
+4. Run exact-head hosted validation and protected-integrate the locally
+   verified EDITOR-VIEWPORT-R1 source repair before constructing `dev.33`.
+5. Obtain organization-owner MFA verification, submit and receive the SignPath
    Foundation decision, and install/configure the GitHub App without guessing
    organization, project, policy, or artifact-configuration identifiers.
-5. Implement and validate the production two-stage executable/NSIS signing
+6. Implement and validate the production two-stage executable/NSIS signing
    package with the real configuration and fail-closed negative/recovery paths.
-6. After Windows-signing disposition, run one protected
+7. After Windows-signing disposition, run one protected
    candidate workflow against the exact current upstream default-branch commit and
    independently verify Draft assets, hashes, identities, macOS trust evidence,
    and Draft-only state.
-7. Perform exact installed `dev.33` References/Rename/editor-intelligence,
+8. Perform exact installed `dev.33` References/Rename/editor-intelligence,
    Data Viewer, Issue #33, live-Provider repair, proposal Accept/verified Undo,
    startup, update, upgrade, uninstall, and Windows acceptance in proportion to
    the carried release risk.
-8. Resolve Issue #26's Windows signing disposition without treating an
+9. Resolve Issue #26's Windows signing disposition without treating an
    unsigned installer as a public-release pass.
-9. Prove the exact root `LICENSE` and `LICENSES.md` are bundled under the fixed
+10. Prove the exact root `LICENSE` and `LICENSES.md` are bundled under the fixed
    Rho resource path, the About action reveals the installed license offline,
    and the installed bytes match the candidate source on both platforms.
-10. Reconcile candidate evidence, then stop for explicit MAC5 GO. Publication
+11. Reconcile candidate evidence, then stop for explicit MAC5 GO. Publication
    and updater mutation remain separate actions.
 
 ## Current Decision
@@ -201,9 +234,12 @@ The original source repair, version synchronization, complete validation,
 hosted matrices, AGPL LIC-1/LIC-2, and their protected integration pass.
 SP-READY1 implementation, review, exact-head/main hosted validation,
 integration, initial public policy deployment, private reporting, and default-
-branch rules pass. PR #46 public-guidance integration/deployment, organization-
-owner MFA review, SignPath approval/GitHub App configuration, production two-
-stage Windows signing, and Issue #26's signing disposition remain open.
+branch rules pass. PR #46 protected integration passes while its
+public-guidance deployment verification remains open. EDITOR-VIEWPORT-R1 local
+implementation, validation, review, and NEWS reconciliation pass; exact hosted
+validation and protected integration remain open. Organization-owner MFA
+review, SignPath approval/GitHub App configuration, production two-stage
+Windows signing, and Issue #26's signing disposition remain open.
 Current decision remains `NO-GO` for candidate construction. Exact candidate,
 installed acceptance, acceptance upload, MAC5, public publication, and
 candidate update-site mutation remain open.

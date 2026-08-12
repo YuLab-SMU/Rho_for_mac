@@ -4,7 +4,9 @@ Status: active; ISSUE-33-INTERACTION-1 authorized 2026-08-11; source
 implementation, automated verification, and post-verification contract review
 complete; exact hosted source matrix and upstream source integration complete
 at `1b3f522`; replacement-candidate browser/mock and exact installed macOS
-interaction pass; installed Windows acceptance open
+interaction pass; EDITOR-VIEWPORT-R1 source implementation, complete affected
+automated verification, and post-verification review complete 2026-08-12;
+installed Windows acceptance open
 
 Date: 2026-08-11
 Authorization: user requested verification and repair of GitHub Issue #33 on
@@ -261,3 +263,107 @@ long streamed R expression continued. Candidate `dev.31` was later rejected by
 the separately owned installed References/Rename defect, not by Issue #33.
 Exact installed Windows reproduction remains open and continues to block Issue
 closure; this macOS pass cannot be relabelled as `dev.32` candidate evidence.
+
+## EDITOR-VIEWPORT-R1 Background Refresh Amendment
+
+Authorization: after reviewing the remaining Issue #33 reproduction and the
+proposed narrow repair, the project owner explicitly instructed the agent to
+start the repair on 2026-08-12.
+
+Change class: D1 presentation defect repair
+
+Risk: R1 local user-owned editor reading position
+
+### Reproduction and invariant
+
+Open a source document with its saved cursor or selection outside the visible
+Monaco viewport, scroll to an older reading position without moving the cursor,
+then change another supported project file. The recursive watcher invokes
+`listenForProjectChanges()`, which calls `refreshProject()`; that path
+reopens the active document with `focusEditor: false`. The focus guard works,
+but `applyDocumentSelection()` still calls
+`revealPositionInCenterIfOutsideViewport()` unconditionally and moves the
+viewport back to the saved selection.
+
+Regression invariant: a background document refresh may synchronize truthful
+model and saved selection state, but it may neither focus the editor nor reveal
+that selection and revoke a newer user-owned viewport. Explicit document
+activation and source navigation retain both focus and reveal authority.
+
+### Scope, ownership, and non-goals
+
+- Separate selection-reveal intent from editor-focus intent at the real
+  `applyDocumentSelection()` boundary. Reveal defaults to the caller focus
+  intent for compatibility: existing explicit activation continues to focus
+  and reveal, while established `focusEditor: false` background paths do
+  neither.
+- Keep selection synchronization intact so cursor persistence and document
+  truth remain owned by WP2.
+- Keep the Issue #18 modal predicate as the final guard for explicit focus.
+  A visible modal does not suppress an otherwise explicit reveal.
+- Do not change watcher cadence, project refresh admission, document content,
+  cursor persistence, Agent edit authority, execution, backend commands,
+  browser mocks, schema, credentials, project identity, or filesystem access.
+
+Cross-review resolves no ownership conflict: Issue #33 already owns background
+focus and reading-position presentation; WP2 retains document/cursor truth,
+Issue #15 retains current-line advancement, Issue #18 retains modal detection,
+and UX-FIX4 retains explicit Console focus.
+
+### Verification and stop point
+
+- Execute the real `applyDocumentSelection()` seam and prove that a background
+  call synchronizes selection without focus or reveal.
+- Prove default explicit activation still focuses and reveals, and prove an
+  explicit reveal-only request remains possible without focus.
+- Run the focused Issue #33 and modal regressions, JavaScript syntax, all
+  compatible frontend contracts, and `git diff --check`.
+- Review all callers of the selection/render boundary and verify that every
+  existing `focusEditor: false` path is background-owned.
+- Stop after source implementation, automated evidence, contract review, and a
+  scoped commit. Browser interaction and exact installed Windows acceptance
+  remain separately open and continue to block Issue closure.
+
+Version decision: the undistributed `0.4.0-dev.33` source identity has no tag,
+candidate artifact, or Release and may include this repair. Record the behavior
+under the existing `0.4.0-dev.33` NEWS section without changing application
+metadata. No R package contract changes, so no R package version bump applies.
+
+### Implementation and evidence
+
+Implemented on 2026-08-12:
+
+- `applyDocumentSelection()` now accepts caller-owned `revealSelection`
+  intent, defaulted to `focusEditor`. Background render paths therefore
+  continue to synchronize the saved selection without moving the Monaco
+  viewport or taking focus.
+- Explicit activation retains the existing focus-and-reveal behavior, and an
+  explicit reveal-only caller can reveal without acquiring focus.
+- The real function-seam regression first failed on the prior unconditional
+  reveal and now covers background, explicit activation, and reveal-only
+  behavior. The adjacent modal regression now rejects background reveal while
+  preserving explicit reveal behind the modal focus guard.
+
+Automated verification passed without retry-after-failure normalization:
+
+- `node --check desktop/dist/app.js`, both focused regressions, all 60
+  `scripts/test-*.mjs` contracts, and `git diff --check`;
+- `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --locked`, and
+  `cargo test --workspace --locked --no-fail-fast`: 365 passed, zero failed,
+  and one opt-in macOS Keychain smoke ignored by design; and
+- `rho.bridge`: 575 passed, zero failed/warned/skipped; `rho.agent`: 120
+  passed, zero failed/warned/skipped, with user startup files disabled.
+
+The post-verification review inspected every direct selection application and
+every `focusEditor: false` render/open path. The latter are limited to project
+refresh, preserved-active restoration, external reload, session hydration, and
+automatic Agent application. No explicit user navigation lost reveal
+authority, and no backend/mock command, dependency, schema, persistence,
+credential, project, execution, or filesystem boundary changed.
+
+The existing `0.4.0-dev.33` NEWS section now records this repair; application
+metadata and both R package versions remain unchanged. Browser interaction,
+installed macOS confirmation for this exact source, exact hosted-head
+validation, protected integration, and installed Windows acceptance were not
+run in this local slice. The document remains active and Issue #33 remains open.
