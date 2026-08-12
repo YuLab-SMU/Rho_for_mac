@@ -66,6 +66,13 @@ complete affected validation, review, documentation reconciliation, and a
 scoped commit. Protected push/integration and every candidate or publication
 action remain separate gates.
 
+The owner's follow-up that a Windows installer is required to test the repair
+activates one `Rho_for_mac` `build_mode=rehearsal` run after the exact source
+is PR-integrated to that fork's default branch. Its 14-day Actions artifacts
+are review-only, unsigned, and non-public. This authorization does not permit
+candidate mode, a tag or Release, update-site mutation, candidate acceptance,
+MAC5, or publication, and it does not lift the current candidate `NO-GO`.
+
 `0.4.0-dev.32` is immutable and rejected. Its Windows artifact, source checks,
 and failed macOS candidate result cannot be relabelled or composed into this
 identity.
@@ -183,6 +190,10 @@ credential, project, execution, or filesystem change.
    failing regression, all affected local validation, NEWS reconciliation, and
    post-verification review pass. Exact hosted-head validation and protected
    integration remain open; no candidate or installed acceptance is claimed.
+10. **AUTHORIZED / NOT RUN** — one exact-source `Rho_for_mac` rehearsal may
+    produce a 14-day unsigned Windows Actions artifact for owner testing. It
+    creates no Release or candidate evidence and cannot satisfy downstream
+    release gates.
 
 Pre-merge update-site review found that making `license_boundary` globally
 mandatory also rejected immutable published `0.4.0-dev.24` evidence and would

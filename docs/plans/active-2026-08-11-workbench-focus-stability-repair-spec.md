@@ -367,3 +367,28 @@ metadata and both R package versions remain unchanged. Browser interaction,
 installed macOS confirmation for this exact source, exact hosted-head
 validation, protected integration, and installed Windows acceptance were not
 run in this local slice. The document remains active and Issue #33 remains open.
+
+### Test-only Windows rehearsal activation
+
+Authorization: after the local repair handoff, the project owner stated on
+2026-08-12 that no Windows installer was available for testing. This activates
+one review-only rehearsal build so the exact repaired source can produce an
+installable Windows artifact.
+
+- Synchronize the dedicated `YuLab-SMU/Rho_for_mac` rehearsal repository
+  default branch to the current upstream baseline, integrate this scoped repair
+  through a PR, and dispatch `candidate-build-draft.yml` with
+  `build_mode=rehearsal` against that exact fork-main commit.
+- The workflow may upload its immutable Windows installer, checksum, and
+  platform evidence as a 14-day Actions artifact. It must not create a tag,
+  GitHub Release, Draft Release, update manifest, acceptance asset, or public
+  download.
+- The Windows installer remains unsigned until the separately governed
+  SignPath work is complete. SmartScreen behavior is not a signing pass.
+- The Windows artifact may be downloaded and handed to the owner as soon as
+  its platform job passes; the independent macOS rehearsal chain does not need
+  to finish before Windows interaction testing begins.
+- This artifact can establish review-only installed behavior for the exact
+  source commit. It is not a `dev.33` release candidate and cannot satisfy the
+  exact-candidate, installed-candidate, Issue closure, MAC5, publication, or
+  updater gates.
