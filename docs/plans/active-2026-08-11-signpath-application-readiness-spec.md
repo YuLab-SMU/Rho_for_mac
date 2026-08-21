@@ -1,10 +1,13 @@
 # SignPath Application Readiness Contract
 
 Status: active; SP-READY1 repository-readiness package, exact-head and merged-
-main hosted validation, upstream integration, public policy deployment, private
-reporting, and default-branch ruleset complete; organization-owner MFA audit,
-external application/GitHub App configuration, and production signing remain
-open
+main hosted validation, upstream integration, linked SignPath attribution,
+public uninstall guidance, live policy deployment, private reporting, and
+default-branch ruleset complete; a real Free Trial project/test policy exists
+and FT-SIGN1 isolated hosted smoke run `31675464182` is accepted;
+organization-owner MFA
+audit, Foundation application/decision, approved-project GitHub App
+configuration, and production signing remain open
 
 Date: 2026-08-11 EDT / 2026-08-12 UTC
 Authorization: after directing the next version to be merged and published,
@@ -17,6 +20,36 @@ Change class: D4 public policy, release supply chain, and application-readiness
 work; the update behavior correction is D3 network/privacy behavior
 Risk: R4 overall; R3 for user-initiated network admission
 Work package: SP-READY1
+
+## 2026-08-12 Free Trial Smoke Amendment
+
+The project owner authorized the bounded FT-SIGN1 work package in
+`active-2026-08-12-signpath-free-trial-smoke-spec.md` after the existing
+SignPath Free Trial organization, `rho` project, self-signed test certificate,
+test policy, artifact configuration, API token, and protected repository secret
+were verified. FT-SIGN1 may protected-integrate one isolated manual workflow
+and submit one test-only installer for signing after integration.
+
+This amendment does not satisfy or replace the Foundation application,
+organization-owner MFA, GitHub App/trusted-build, production two-stage signing,
+candidate, installed-candidate, MAC5, publication, or updater gates. The Free
+Trial workflow must remain separate from candidate and manual-publish workflows
+and must not expose its returned bytes through a Release or update site.
+
+## 2026-08-13 Test-Signed Prerelease Amendment
+
+After FT-SIGN1 completed, the owner separately authorized DEV38-SIGN1 under
+`active-2026-08-13-dev38-test-signed-prerelease-spec.md`. That D4/R4 contract
+may add a new candidate-only request for a fresh `0.4.0-dev.38` NSIS installer
+and publish it only after exact human acceptance and MAC5 GO. FT-SIGN1 remains
+isolated: its `dev.37` request and returned bytes are never reused or promoted.
+
+DEV38-SIGN1 does not satisfy this document's Foundation, production
+certificate, MFA, GitHub App/trusted-build, or two-stage executable-plus-
+installer signing gates. Its release notes, policy amendment, and download-page
+projection must call the result a Free Trial self-signed test signature with no
+public trust and possible SmartScreen warnings. Rehearsal remains unsigned and
+review-only.
 
 ## Problem And Current Evidence
 
@@ -49,7 +82,10 @@ signature, candidate, tag, Release, or updater mutation.
    migration or deletion authority.
 3. Manual update behavior, endpoint/channel policy, bounds, timeout, URL
    allowlists, structured failure states, and user-initiated external browser
-   navigation remain unchanged.
+   navigation remain unchanged **within SP-READY1**. A later separately
+   activated signed-native-updater contract may extend the explicit-user
+   install action, but it cannot restore startup/background checks or weaken
+   this privacy boundary.
 4. `PRIVACY.md` is the public data/network contract. It must distinguish local
    project/application data from user-initiated remote operations, describe OS
    credential storage and custom Base URL risk, state retention/deletion
@@ -93,14 +129,19 @@ signature, candidate, tag, Release, or updater mutation.
   files, application data, logs, or operating-system credential storage.
 - The AGPL contract owns license identity and installed license bytes, not
   signing or privacy. LIC-2 protected integration is a prerequisite.
-- The `0.4.0-dev.33` checklist alone owns exact candidate identity, artifact
-  construction, installed acceptance, MAC5, publication, and update-site
+- The `0.4.0-dev.37` checklist remains the immutable Issue #33/FT-SIGN1 source
+  ledger, and `dev.38` remains an immutable unpublished NO-GO Draft. The active
+  historical `0.4.0-dev.39` CPREL1 checklist alone owns the exact candidate identity,
+  artifact construction, conditional decision, publication, and update-site
   mutation. SP-READY1 cannot satisfy those gates.
 
 No schema, project identity, approval table, Provider format, credential
-format, R package contract, or public updater manifest changes. Cross-review
-found no unresolved state, persistence, approval, or mutation ownership
-collision after the manual-only amendment above.
+format, R package contract, or public updater manifest changes occur in
+SP-READY1. A separately activated native-updater package owns any future
+distinct Tauri manifest and final-byte signing pipeline; it must preserve this
+manual-only network policy. Cross-review found no unresolved state,
+persistence, approval, or mutation ownership collision after the manual-only
+amendment above.
 
 ## Public Privacy Contract
 
@@ -265,38 +306,115 @@ repository administrator. `GuangchuangYu` is the organization owner and a Rho
 repository administrator. GitHub rejected the authenticated member's
 organization-wide `2fa_disabled` audit because only organization owners may
 use that filter, so MFA compliance for every future signing role remains an
-explicit owner-owned gate rather than a claimed pass. No SignPath application
-or GitHub App installation/configuration has occurred.
+explicit owner-owned gate rather than a claimed pass. The later read-only
+external audit confirmed an active Free Trial organization, valid `rho`
+project, self-signed `Rho Test Signing` certificate, valid `test-signing`
+policy, valid installer artifact configuration, submitter API token, and
+protected `SIGNPATH_API_TOKEN` repository secret. No Foundation acceptance,
+production certificate/policy, GitHub App/trusted-build link, or successful
+signing request is claimed by that configuration evidence.
 
 The 2026-08-12 application-form audit found that the public attribution named
 SignPath.io and SignPath Foundation without the official links required by the
 Foundation terms, while the privacy policy described retained data after
 uninstall but no public surface supplied executable Windows/macOS uninstall
-steps. PR #46 amends this contract and carries linked attribution, README and
+steps. PR #46 amended this contract with linked attribution, README and
 download-page instructions and pending-application disclosure, generator
 assertions, and separate negative tests for loss of either public uninstall
-surface or the download-page SignPath disclosure. On the amended local tree,
-all 60 deterministic JavaScript contracts, both focused readiness modes, Node
-syntax, and `git diff --check` pass. Protected integration, public-site
-deployment, and live verification remain open facts and are not inferred from
-local tests.
+surface or the download-page SignPath disclosure.
+
+Its exact head `0e618c8eda9f9dcfe43ac95669d16fc27791cb6f` passed all four
+macOS/Windows stable/MSRV jobs in run `31563972114`. Organization owner and
+CODEOWNER `GuangchuangYu` approved that exact latest push; PR #46 then merged
+as `71dfd3a442a3a22abacd8a49e400ff8deae1760a`, whose exact-main run
+`31576354218` passed the same four identities. No rerun or approval from an
+older commit was composed into these results.
+
+The output-producing public-guidance source remained unchanged while later
+accepted work advanced the current main to
+`b6bc441f521c8ed905cda78ea429f102460d04e6`; only the update-site strict
+self-test identity and the readiness test's active-checklist reference moved
+forward. Update-site run `31646300758` checked out that exact main, revalidated
+published Release evidence, passed generator self-tests, published orphan
+`gh-pages` commit `76d463a61c9f4e6d70f208f7b8c3808ef147afea`, and verified the
+deployed development manifest.
+
+Independent live review found the explicit pending Foundation application,
+official SignPath.io/Foundation links, visible Windows and macOS uninstall
+steps, retained-data warning, policy links, and truthful unsigned-Windows
+statement. The live HTML SHA-256 was
+`ae1b27acccce7b63240ae28014d83b55df100421d40db090f8b95714ef524fed`;
+the manifest SHA-256 was
+`ccb2612d996433abd1ee2873383b2179b2579eb145d009e1a22c4681c3a0805e`.
+The manifest remains immutable published `0.4.0-dev.24` with Windows bytes
+18,148,181 / SHA-256
+`114389aa675045beddb58c01dc7c4a0aec5936081b04018456694c770ae0b774`
+and macOS bytes 20,967,631 / SHA-256
+`f24982a616b1695621cdb7f9b9c8d001083926fb77a975c6f582b339da50c34f`.
+No candidate, tag, Release, signing request, or update identity changed.
+
+This post-deployment reconciliation is a documentation-only evidence update.
+It changes no application, workflow, artifact, credential, signing, candidate,
+Release, or update-site bytes, so the application version and `NEWS.md` remain
+unchanged.
+
+## CPREL1 Conditional-Prerelease Boundary — 2026-08-13
+
+The owner separately authorized one `0.4.0-dev.39` conditional evaluation
+prerelease whose Windows human installation and enabled-Gatekeeper macOS human
+launch are truthfully recorded as not run. CPREL1 does not alter this
+document's SignPath Foundation, production certificate/policy, trusted-build,
+MFA, per-request approval, or two-stage signing gates. Candidate-mode Free
+Trial evidence must still prove the exact unsigned input, returned self-signed
+signature, request, certificate facts, changed bytes, and final hash. The
+conditional decision cannot claim public trust, Foundation acceptance,
+production readiness, or ordinary installed acceptance.
+
+The already audited `dev.38` Draft remains immutable and unpublished because
+its reviewed body requires ordinary human acceptance. CPREL1 uses a fresh
+`dev.39` request and artifacts, and adds only an actor-bound,
+public-prerelease-only schema-v2 decision plus public limitation disclosure.
+
+## 2026-08-17 Free Trial Two-Stage dev.42 Amendment
+
+The owner decided that Windows development prereleases will use the current
+SignPath Free Trial certificate for an extended period. Installed dev.41
+evidence proved the outer installer's test signature does not sign the
+installed `rho-desktop.exe`; PowerShell returned `NotSigned`. The strict
+`github-actions-rho-desktop-binary` artifact configuration now exists in the
+SignPath `rho` project. The active D4/R4 implementation and candidate contract
+is `active-2026-08-17-signpath-free-trial-two-stage-dev42-spec.md`.
+
+This amendment authorizes the two-stage topology with the Free Trial
+self-signed certificate while preserving truthful `UnknownError`/untrusted
+disclosure. It does not claim Foundation acceptance or production trust and
+does not weaken the future production certificate, trusted-build, MFA, or
+timestamp gates.
 
 ## Version, NEWS, And Release Decision
 
 SP-READY1 changes user-visible update behavior and therefore amends the
 `0.4.0-dev.33` NEWS entry. That identity is already synchronized, has never
-produced an artifact, tag, or Release, and remains the single active source
-candidate; no additional application-version bump is required for this
-pre-candidate integration. R package versions and store schema remain fixed.
+produced an artifact, tag, or Release. Later PR #48/#50 user-visible focus and
+reading-position repairs supersede it with `0.4.0-dev.34`; all SP-READY1 and
+SignPath prerequisites carry forward unchanged. The rejected internal `dev.34`
+Issue #33 run required fresh `dev.35`, whose installed interaction attempt was
+also rejected when its environment-only WebView2 debug request was superseded
+by Wry's explicit arguments. The bounded acceptance-only correction advances
+to fresh `0.4.0-dev.36`; no SignPath scope, state, or evidence changed. R
+package versions and store schema remain fixed.
 
 The release decision remains `NO-GO`. SP-READY1 PR-gated integration, private
 vulnerability reporting, default-branch review enforcement, and public policy
-deployment pass. The mandatory stop is now external readiness: obtain the
-organization-owner MFA verification and GitHub App configuration, then submit
-and receive the SignPath Foundation decision. Production two-stage signing is
-a later D4/R4 package using real identifiers. Only a new exact signed candidate
-with two-platform installed acceptance and explicit MAC5 GO can proceed to
-publication.
+deployment pass. FT-SIGN1 completed one isolated Free Trial request without
+granting release authority. Production readiness still requires the
+organization-owner signing-role MFA verification, Foundation application and
+decision, then any required production GitHub App/trusted-build and
+certificate/policy configuration. Production two-stage signing is a later
+D4/R4 package. Only a new exact production-signed candidate with two-platform
+installed acceptance and explicit MAC5 GO can claim production readiness.
+CPREL1's allowlisted conditional development prerelease remains evaluation-only
+and does not satisfy that gate.
 
 ## SP-READY1 Definition Of Done
 

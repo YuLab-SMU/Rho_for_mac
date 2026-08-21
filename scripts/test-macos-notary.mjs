@@ -20,8 +20,8 @@ import {
 const identity = {
   repository: "YuLab-SMU/Rho_for_mac",
   buildMode: "rehearsal",
-  version: "0.4.0-dev.33",
-  releaseTag: "v0.4.0-dev.33",
+  version: "0.4.0-dev.37",
+  releaseTag: "v0.4.0-dev.37",
   commit: "a".repeat(40),
   runId: "31000000000",
   runAttempt: "1",
@@ -126,7 +126,7 @@ async function expectReject(action, pattern) {
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "rho-notary-contract-"));
 try {
-  const dmgPath = path.join(root, "Rho_0.4.0-dev.33_aarch64.dmg");
+  const dmgPath = path.join(root, "Rho_0.4.0-dev.37_aarch64.dmg");
   const receiptPath = path.join(root, "notary-submit.json");
   fs.writeFileSync(dmgPath, Buffer.from("signed candidate dmg fixture\n"));
   fs.writeFileSync(receiptPath, `${JSON.stringify({
@@ -154,6 +154,22 @@ try {
   assert.throws(
     () => createPendingRecord({ receiptPath, dmgPath, ...identity, buildMode: "candidate" }),
     /not authorized/,
+  );
+
+  const appArchivePath = path.join(root, "Rho_0.4.0-dev.37_aarch64.app.zip");
+  fs.writeFileSync(appArchivePath, Buffer.from("signed candidate app archive fixture\n"));
+  const appArchivePending = createPendingRecord({
+    receiptPath,
+    artifactPath: appArchivePath,
+    artifactKind: "app_zip",
+    ...identity,
+  });
+  assert.equal(appArchivePending.artifact_kind, "app_zip");
+  assert.equal(appArchivePending.submission.artifact_name, path.basename(appArchivePath));
+  assert.deepEqual(validatePendingRecord(structuredClone(appArchivePending), identity), appArchivePending);
+  assert.throws(
+    () => createPendingRecord({ receiptPath, artifactPath: appArchivePath, artifactKind: "dmg", ...identity }),
+    /name does not match/,
   );
 
   const cliPendingPath = path.join(root, "cli", `rho-${identity.version}-macos-notary-pending.json`);
@@ -250,6 +266,38 @@ try {
   assert.ok(developerCall);
   assert.equal(developerCall.headers.Authorization, undefined, "Bearer token must not be sent to the developer-log host");
   assert.ok(successHarness.calls.filter((call) => call.url.endsWith(submissionId)).every((call) => call.url.endsWith(pending.submission.id)));
+
+  const appArchiveSuccess = await waitForAccepted(appArchivePending, {
+    issuer,
+    keyId,
+    privateKey: privatePem,
+    request: pollingHarness(appArchivePending).request,
+    sleep: async () => {},
+    now: () => 1_700_000_000_000,
+    pollIntervalMs: 1000,
+    maxWaitMs: 20_000,
+  });
+  assert.equal(appArchiveSuccess.accepted.artifact_kind, "app_zip");
+  assert.equal(
+    appArchiveSuccess.accepted.submission.log.name,
+    `rho-${identity.version}-macos-app-archive-notary-log.json`,
+  );
+  const appPendingPath = path.join(root, `rho-${identity.version}-macos-app-archive-notary-pending.json`);
+  const appAcceptedPath = path.join(root, `rho-${identity.version}-macos-app-archive-notary-accepted.json`);
+  const appLogPath = path.join(root, appArchiveSuccess.accepted.submission.log.name);
+  fs.writeFileSync(appPendingPath, `${JSON.stringify(appArchivePending, null, 2)}\n`);
+  fs.writeFileSync(appAcceptedPath, `${JSON.stringify(appArchiveSuccess.accepted, null, 2)}\n`);
+  fs.writeFileSync(appLogPath, appArchiveSuccess.logBytes);
+  assert.equal(
+    verifyFinalizerInputs({
+      pendingPath: appPendingPath,
+      acceptedPath: appAcceptedPath,
+      logPath: appLogPath,
+      artifactPath: appArchivePath,
+      expected: identity,
+    }).pending.artifact_kind,
+    "app_zip",
+  );
 
   const transientHarness = pollingHarness(pending, {
     statusResponses: [
@@ -573,7 +621,7 @@ try {
   fs.appendFileSync(dmgPath, "tampered");
   assert.throws(
     () => verifyFinalizerInputs({ pendingPath, acceptedPath, logPath, dmgPath, expected: identity }),
-    /Submitted DMG does not match/,
+    /Submitted notarization artifact does not match/,
   );
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

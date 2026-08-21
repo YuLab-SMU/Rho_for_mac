@@ -1,17 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_llm;
+mod commands;
 mod git;
 mod git_review;
 mod platform;
 mod project;
 mod update;
+mod workspace_plugins;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{Command, Stdio};
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -27,40 +31,50 @@ use agent_llm::{
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use project::{
-    ProjectRestoreResponse, ProjectSessionSnapshot, ProjectSessionStore, ProjectState,
-    ProjectSwitchBlocker, ProjectSwitchBlockerKind, ProjectWatcherControl, atomic_write,
-    atomic_write_new, default_project_root, display_path, ensure_editable_content_size,
-    ensure_editable_file, ensure_editable_file_size, list_project_files,
-    normalize_existing_project_root, project_path, read_viewer_file, relative_project_path,
-    start_project_watcher, validate_project_root,
+    MAX_VIEWER_FILE_BYTES, MAX_VIEWER_HTML_BYTES, ProjectRestoreResponse, ProjectSessionSnapshot,
+    ProjectSessionStore, ProjectState, ProjectSwitchBlocker, ProjectSwitchBlockerKind,
+    ProjectWatcherControl, atomic_write, atomic_write_new, default_project_root, display_path,
+    ensure_editable_content_size, ensure_editable_file, ensure_editable_file_size,
+    list_project_files, normalize_existing_project_root, project_path, read_viewer_file,
+    relative_project_path, start_project_watcher, validate_project_root,
 };
 use rho_core::{BrokerState, ExecutionOrigin};
+use rho_extension_runtime::{
+    ActivationError, BoundedJson, BrokerError, BrokerFacade, BrokerRequest, BrokerResponse,
+    BrokerResponseClass, CapabilityDeclaration, CapabilityId, CapabilityRequirement,
+    DEFAULT_HEARTBEAT_INTERVAL, DiagnosticSink, DisposeOutcome, ExtensionDiagnostic, ExtensionHost,
+    InternalExtensionRuntimeMode, InternalPlugin, LifecycleDeadlines, OperationId, PluginContext,
+    PluginDescriptor, PluginVersion, ProjectFileViewerContribution, ScopeId, ScopeKindId,
+    ScopeSnapshot, SourceHandler, WorkspaceGrantIdentity, WorkspaceToolHandler,
+};
 use rho_kernel::{ArkLaunchConfig, ArkSession, KernelEvent};
 use rho_server::coordinator::{
-    AgentWorkspaceLane, ApprovalResponseInput, CoordinatorRuntime, EnvironmentOperationArguments,
-    PendingApprovalRegistry, ProjectSkillDiscoverySummary, bootstrap_bridge,
-    decide_environment_operation, discover_project_skill_summaries, dispatch_workspace_request,
-    dispatch_workspace_request_with_execution_id, request_environment_operation, run_agent_turn,
+    AgentPluginContributionAdapter, AgentRuntimeAdapters, AgentWorkspaceLane,
+    ApprovalResponseInput, CoordinatorRuntime, EnvironmentOperationArguments,
+    PendingApprovalRegistry, ProjectSkillDiscoverySummary, WorkspaceSnapshotAdapter,
+    bootstrap_bridge, decide_environment_operation, discover_project_skill_summaries,
+    dispatch_workspace_request, dispatch_workspace_request_with_execution_id,
+    request_environment_operation, run_agent_turn,
 };
 use rho_store::{
     AgentConversationDraft, AgentConversationSummary, AgentTurnDetail, AgentTurnDraft,
     AgentTurnEventDraft, AgentTurnFinish, AgentTurnSummary, ApprovalRequestSummary,
-    ArtifactRecordDraft, ArtifactRecordSummary, AuditLimits, AuditResponse, AuditScope,
-    CompareRunsResponse, EnvironmentOperationRequestSummary, EvidenceClaim, EvidenceClaimDraft,
-    EvidenceClaimReview, EvidenceEntry, EvidenceEntryDraft, PlotArtifactSummary,
-    PlotPayloadPruneResult, ProblemSummary, ProjectRetentionSummary, RetentionPolicy, RunDetail,
-    RunSummary, Store, normalize_project_root,
+    ArtifactRecordDraft, ArtifactRecordSummary, EnvironmentOperationRequestSummary, EvidenceClaim,
+    EvidenceClaimDraft, EvidenceClaimReview, EvidenceEntry, EvidenceEntryDraft,
+    PlotArtifactSummary, PlotPayloadPruneResult, ProjectMutationService, ProjectQueryService,
+    ProjectRetentionSummary, RetentionPolicy, RunDetail, RunSummary, Store, normalize_project_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State, path::BaseDirectory};
+use tauri_plugin_updater::UpdaterExt;
 #[cfg(test)]
 use tokio::sync::Notify;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use uuid::Uuid;
 
-use update::{ReleaseChannel, SOURCE_URL, UpdateCheckResult, WEBSITE_URL};
+use update::{ReleaseChannel, SOURCE_URL, WEBSITE_URL};
 
 const BRIDGE_STATE: &str = include_str!("../../../r/rho.bridge/R/state.R");
 const BRIDGE_EXECUTE: &str = include_str!("../../../r/rho.bridge/R/execute.R");
@@ -157,6 +171,26 @@ struct AppInfo {
     runtime: AppRuntimeInfo,
 }
 
+#[derive(Serialize)]
+struct NativeUpdateCheckResult {
+    status: &'static str,
+    channel: ReleaseChannel,
+    installed_version: String,
+    available_version: Option<String>,
+    published_at: Option<String>,
+    summary: Option<String>,
+}
+
+struct NativePendingUpdate {
+    update: tauri_plugin_updater::Update,
+    channel: ReleaseChannel,
+}
+
+struct NativeUpdaterState {
+    operation_gate: Mutex<()>,
+    pending: Mutex<Option<NativePendingUpdate>>,
+}
+
 #[derive(Debug)]
 struct RRuntimeProbe {
     r_home: String,
@@ -229,6 +263,8 @@ struct AppState {
     approvals: Arc<PendingApprovalRegistry>,
     environment_approvals: Arc<PendingApprovalRegistry>,
     project_transition_gate: Arc<Mutex<()>>,
+    extension_host: Arc<ExtensionHost>,
+    plugin_permissions: Arc<workspace_plugins::PendingPluginPermissionRegistry>,
     agent_tasks: Arc<Mutex<HashMap<String, AgentTaskEntry>>>,
     agent_workspace_lane: Arc<AgentWorkspaceLane>,
     agent_file_mutations: Arc<AgentFileMutationRegistry>,
@@ -489,6 +525,8 @@ static STARTUP_LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum SwitchTestStep {
+    BuildExtensionCandidate,
+    ActivateExtensionCandidate,
     SyncWorkspace,
     SetActiveProjectRoot,
     SaveLastOpenedProject,
@@ -664,6 +702,7 @@ struct AgentFileMutationResponse {
     workspace: rho_protocol::WorkspaceIdentity,
 }
 
+#[derive(Clone)]
 struct PersistedAgentFileProposal {
     path: String,
     operation: String,
@@ -834,12 +873,141 @@ async fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
     })
 }
 
+fn native_updater_error(code: &str, error: impl std::fmt::Display) -> String {
+    write_startup_log(&format!(
+        "Native updater {code}: {}",
+        bounded_diagnostic(&error.to_string())
+    ));
+    format!("{code}: The signed update operation did not complete.")
+}
+
+fn pending_native_update_matches(expected_version: &str, available_version: &str) -> bool {
+    expected_version.len() <= 128
+        && available_version.len() <= 128
+        && semver::Version::parse(expected_version).is_ok()
+        && semver::Version::parse(available_version).is_ok()
+        && expected_version == available_version
+}
+
 #[tauri::command]
-async fn check_for_updates() -> Result<UpdateCheckResult, String> {
-    tauri::async_runtime::spawn_blocking(|| update::check_for_updates(env!("CARGO_PKG_VERSION")))
+async fn check_for_updates(
+    app: AppHandle,
+    updater_state: State<'_, NativeUpdaterState>,
+) -> Result<NativeUpdateCheckResult, String> {
+    let _operation = updater_state.operation_gate.lock().await;
+    *updater_state.pending.lock().await = None;
+
+    if !update::native_updater_supported() {
+        return Err(
+            "UPDATE_PLATFORM_UNAVAILABLE: native updates are not available for this platform."
+                .to_string(),
+        );
+    }
+
+    let installed_version = env!("CARGO_PKG_VERSION").to_string();
+    let parsed_installed = semver::Version::parse(&installed_version)
+        .map_err(|error| native_updater_error("UPDATE_INVALID", error))?;
+    let channel = ReleaseChannel::for_version(&parsed_installed);
+    let endpoint = reqwest::Url::parse(update::native_manifest_url(channel))
+        .map_err(|error| native_updater_error("UPDATE_INVALID", error))?;
+    let native_updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| native_updater_error("UPDATE_INVALID", error))?
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| native_updater_error("UPDATE_INVALID", error))?;
+    let available = native_updater
+        .check()
         .await
-        .map_err(display_error)?
-        .map_err(display_error)
+        .map_err(|error| native_updater_error("UPDATE_NETWORK", error))?;
+
+    let Some(update) = available else {
+        return Ok(NativeUpdateCheckResult {
+            status: "up_to_date",
+            channel,
+            installed_version,
+            available_version: None,
+            published_at: None,
+            summary: None,
+        });
+    };
+
+    update::validate_native_update_candidate_metadata(
+        &update.version,
+        &update.download_url,
+        &update.signature,
+    )
+    .map_err(|error| native_updater_error("UPDATE_INVALID", error))?;
+
+    let summary = update::normalized_native_update_notes(update.body.as_deref())
+        .map_err(|error| native_updater_error("UPDATE_INVALID", error))?;
+    let result = NativeUpdateCheckResult {
+        status: "update_available",
+        channel,
+        installed_version,
+        available_version: Some(update.version.clone()),
+        published_at: update.date.map(|value| value.to_string()),
+        summary: Some(summary),
+    };
+    *updater_state.pending.lock().await = Some(NativePendingUpdate { update, channel });
+    Ok(result)
+}
+
+#[tauri::command]
+async fn install_native_update(
+    expected_version: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    updater_state: State<'_, NativeUpdaterState>,
+) -> Result<(), String> {
+    let _operation = updater_state.operation_gate.lock().await;
+    let Some(pending) = updater_state.pending.lock().await.take() else {
+        return Err("UPDATE_STALE: Check for updates again before installing.".to_string());
+    };
+    if !pending_native_update_matches(&expected_version, &pending.update.version) {
+        *updater_state.pending.lock().await = Some(pending);
+        return Err("UPDATE_STALE: The selected update is no longer current. Check again before installing.".to_string());
+    }
+
+    let bytes = match update::download_and_verify_native_update(&pending.update).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            *updater_state.pending.lock().await = Some(pending);
+            return Err(native_updater_error("UPDATE_DOWNLOAD", error));
+        }
+    };
+
+    if state.shutdown_started.swap(true, Ordering::SeqCst) {
+        *updater_state.pending.lock().await = Some(pending);
+        return Err(
+            "UPDATE_STALE: Rho is already closing. Restart it, then check for updates again."
+                .to_string(),
+        );
+    }
+    if let Err(error) = shutdown_application(&state).await {
+        state.shutdown_started.store(false, Ordering::SeqCst);
+        *updater_state.pending.lock().await = Some(pending);
+        return Err(native_updater_error("UPDATE_SHUTDOWN", error));
+    }
+
+    write_startup_log(&format!(
+        "Native updater verified the download for {} channel; beginning controlled installer handoff.",
+        pending.channel.as_str()
+    ));
+    if let Err(error) = update::install_verified_native_update(&pending.update, &bytes) {
+        write_startup_log(&format!(
+            "Native updater install failed after verified download for {} channel: {}",
+            pending.channel.as_str(),
+            bounded_diagnostic(&error.to_string())
+        ));
+        app.request_restart();
+        return Err("UPDATE_INSTALL: The signed update could not be installed. Rho is restarting its existing version.".to_string());
+    }
+    Err(
+        "UPDATE_INSTALL: Native updater handoff unexpectedly returned without restarting Rho."
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -1058,9 +1226,24 @@ async fn agent_runtime_retry(state: State<'_, AppState>) -> Result<AgentRuntimeS
 
 #[tauri::command]
 async fn workspace_start(state: State<'_, AppState>) -> Result<WorkspaceStatus, String> {
+    let _project_transition = state.project_transition_gate.lock().await;
+    if state.shutdown_started.load(Ordering::SeqCst) {
+        return Err("Rho is closing; Workspace R cannot start".to_string());
+    }
     let started = Instant::now();
+    let already_running = state.session.read().await.is_some();
+    let needs_extension_finalize = state.extension_host.mode()
+        == InternalExtensionRuntimeMode::Candidate
+        && state.extension_host.scopes().workspace().is_none();
     match start_workspace(&state).await {
         Ok(status) => {
+            let status = if already_running && !needs_extension_finalize {
+                status
+            } else {
+                finalize_workspace_start(&state, false)
+                    .await
+                    .map_err(display_error)?
+            };
             write_startup_log(&format!(
                 "startup_phase=workspace_start elapsed_ms={}",
                 started.elapsed().as_millis()
@@ -1163,9 +1346,15 @@ async fn project_restore_session(
         }
     };
     let session_snapshot = state.project_store.load_session_or_default(&root);
-    let result = switch_project(root, Some(session_snapshot), app, &state)
+    let result = switch_project(root.clone(), Some(session_snapshot), app, &state)
         .await
-        .map_err(display_error);
+        .map_err(|error| {
+            write_startup_log(&format!(
+                "project_restore_session failed for {}: {error:#}",
+                root.display()
+            ));
+            display_error(error)
+        });
     write_startup_log(&format!(
         "startup_phase=project_restore elapsed_ms={} outcome={}",
         started.elapsed().as_millis(),
@@ -1202,8 +1391,45 @@ async fn viewer_read_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<project::ViewerFile, String> {
+    viewer_read_file_with_state(path, &state).await
+}
+
+async fn viewer_read_file_with_state(
+    path: String,
+    state: &AppState,
+) -> Result<project::ViewerFile, String> {
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Legacy {
+        let root = state.project_root.read().await.clone();
+        return read_viewer_file(&root, &path).map_err(display_error);
+    }
+    let application = state.extension_host.scopes().application();
+    let resolution = application
+        .registry()
+        .resolve_project_file_viewer(&project_file_viewer_capability_id())
+        .map_err(display_error)?;
+    if resolution.contribution().general_maximum_bytes() != MAX_VIEWER_FILE_BYTES as usize
+        || resolution.contribution().html_maximum_bytes() != MAX_VIEWER_HTML_BYTES as usize
+    {
+        return Err("Project file viewer contribution has incompatible size limits".to_string());
+    }
     let root = state.project_root.read().await.clone();
-    read_viewer_file(&root, &path).map_err(display_error)
+    let viewed = read_viewer_file(&root, &path).map_err(display_error)?;
+    let current_root = state.project_root.read().await.clone();
+    if current_root != root {
+        return Err("Project file viewer result is stale after a project switch".to_string());
+    }
+    if !resolution
+        .contribution()
+        .supported_media_types()
+        .iter()
+        .any(|media_type| media_type == viewed.media_type)
+    {
+        return Err(format!(
+            "Project file viewer contribution does not declare media type {}",
+            viewed.media_type
+        ));
+    }
+    Ok(viewed)
 }
 
 #[tauri::command]
@@ -1398,6 +1624,71 @@ fn persisted_agent_file_proposal(
         content,
         editor_context,
     })
+}
+
+fn ensure_agent_file_proposal_turn_terminal(
+    store: &Store,
+    project_root: &str,
+    turn_id: &str,
+) -> Result<()> {
+    let detail = store
+        .get_agent_turn_detail(project_root, turn_id)?
+        .context("Agent file proposal turn was not found in the active project")?;
+    ensure!(
+        !matches!(
+            detail.turn.status.as_str(),
+            "queued" | "running" | "waiting"
+        ),
+        "AGENT_FILE_TURN_ACTIVE: Wait for this Agent turn to finish before accepting its file proposal."
+    );
+    Ok(())
+}
+
+fn validate_persisted_agent_file_proposal_structure(
+    proposal: &PersistedAgentFileProposal,
+) -> Result<()> {
+    if !matches!(
+        proposal.operation.as_str(),
+        "replace_selection" | "insert_at_cursor"
+    ) {
+        return Ok(());
+    }
+    let context = proposal
+        .editor_context
+        .as_ref()
+        .context("AGENT_FILE_PROPOSAL_INVALID: The proposal omitted its editor context.")?;
+    ensure!(
+        context.get("active_path").and_then(Value::as_str) == Some(proposal.path.as_str()),
+        "AGENT_FILE_PROPOSAL_INVALID: The proposal target does not match the captured active file."
+    );
+    let start = context
+        .get("selection_start")
+        .and_then(Value::as_u64)
+        .context("AGENT_FILE_PROPOSAL_INVALID: The proposal start offset is missing.")?;
+    let end = context
+        .get("selection_end")
+        .and_then(Value::as_u64)
+        .context("AGENT_FILE_PROPOSAL_INVALID: The proposal end offset is missing.")?;
+    ensure!(
+        end >= start,
+        "AGENT_FILE_PROPOSAL_INVALID: The proposal range is inverted."
+    );
+    if proposal.operation == "replace_selection" {
+        let selection = context
+            .get("selection_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        ensure!(
+            end > start && !selection.is_empty(),
+            "AGENT_FILE_PROPOSAL_INVALID: Replace selection requires non-empty text selected when the turn starts."
+        );
+    } else {
+        ensure!(
+            end == start,
+            "AGENT_FILE_PROPOSAL_INVALID: Insert at cursor requires an empty captured range."
+        );
+    }
+    Ok(())
 }
 
 fn calculate_persisted_agent_file_edit(
@@ -1926,6 +2217,10 @@ async fn apply_agent_file_edit_state(
         normalized_path == request.path,
         "Agent file proposal path is not normalized"
     );
+    {
+        let store = read_store(state)?;
+        ensure_agent_file_proposal_turn_terminal(&store, &project_root, &request.turn_id)?;
+    }
     let lane_key = format!("{project_root}\0{normalized_path}");
     let task_registry = state.agent_tasks.lock().await;
     let claim =
@@ -1967,6 +2262,7 @@ async fn apply_agent_file_edit_state(
         proposal.path == normalized_path,
         "Agent file proposal path does not match its durable event"
     );
+    validate_persisted_agent_file_proposal_structure(&proposal)?;
     ensure_agent_file_apply_available(persisted_agent_file_mutation_state(
         &store,
         &project_root,
@@ -2787,6 +3083,154 @@ async fn editor_discover_chunks(path: String, state: State<'_, AppState>) -> Res
 
 #[tauri::command]
 async fn snapshot_workspace(state: State<'_, AppState>) -> Result<Value, String> {
+    snapshot_workspace_with_state(&state).await
+}
+
+fn expected_workspace(
+    identity: &rho_protocol::WorkspaceIdentity,
+) -> rho_protocol::ExpectedWorkspace {
+    rho_protocol::ExpectedWorkspace {
+        kernel_instance_id: Some(identity.kernel_instance_id.clone()),
+        state_revision: Some(identity.state_revision),
+        project_revision: Some(identity.project_revision),
+    }
+}
+
+async fn call_extension_workspace_snapshot(
+    extension_host: &ExtensionHost,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+    expected_workspace: rho_protocol::ExpectedWorkspace,
+    origin: ExecutionOrigin,
+    execution_id: Option<String>,
+) -> Result<Value, String> {
+    let scope = extension_host
+        .scopes()
+        .workspace()
+        .context("Workspace Snapshot extension scope is unavailable")
+        .map_err(display_error)?;
+    let operation = WorkspaceOperation::Snapshot {
+        expected_workspace,
+        origin,
+        execution_id,
+    };
+    let request = BoundedJson::generic(serde_json::to_value(operation).map_err(display_error)?)
+        .map_err(display_error)?;
+    let result = scope
+        .registry()
+        .call_workspace_tool(&workspace_snapshot_tool_capability_id(), request)
+        .await
+        .map_err(display_error)?;
+    extension_host
+        .scopes()
+        .validate_workspace_current(&result.scope)
+        .map_err(display_error)?;
+    let project = extension_host
+        .scopes()
+        .project()
+        .context("Workspace Snapshot project extension scope is unavailable")
+        .map_err(display_error)?;
+    if result.scope.parent_id.as_ref() != Some(&project.identity().id) {
+        return Err("Workspace Snapshot extension scope belongs to a stale project".to_string());
+    }
+    let identity = context.lock().await.broker.identity().clone();
+    let expected_scope_id =
+        extension_workspace_scope_id(&project, &identity).map_err(display_error)?;
+    if result.scope.id != expected_scope_id {
+        return Err(
+            "Workspace Snapshot extension scope belongs to a stale kernel lineage".to_string(),
+        );
+    }
+    let completed_workspace: rho_protocol::WorkspaceIdentity = serde_json::from_value(
+        result
+            .payload
+            .value()
+            .get("workspace")
+            .cloned()
+            .context("Workspace Snapshot result omitted workspace identity")
+            .map_err(display_error)?,
+    )
+    .map_err(display_error)?;
+    if completed_workspace.workspace_id != identity.workspace_id
+        || completed_workspace.kernel_instance_id != identity.kernel_instance_id
+        || completed_workspace.state_revision != identity.state_revision
+        || completed_workspace.project_revision != identity.project_revision
+    {
+        return Err("Workspace Snapshot result is stale after Workspace state changed".to_string());
+    }
+    Ok(result.payload.into_value())
+}
+
+struct ExtensionWorkspaceSnapshotAdapter {
+    extension_host: Arc<ExtensionHost>,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+}
+
+impl WorkspaceSnapshotAdapter for ExtensionWorkspaceSnapshotAdapter {
+    fn snapshot<'a>(
+        &'a self,
+        payload: Value,
+        execution_id: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+        Box::pin(async move {
+            let expected_workspace = serde_json::from_value(
+                payload
+                    .get("expected_workspace")
+                    .cloned()
+                    .context("Agent Workspace Snapshot omitted expected_workspace")?,
+            )
+            .context("decoding Agent Workspace Snapshot expected_workspace")?;
+            call_extension_workspace_snapshot(
+                self.extension_host.as_ref(),
+                Arc::clone(&self.context),
+                expected_workspace,
+                ExecutionOrigin::Agent,
+                Some(execution_id),
+            )
+            .await
+            .map_err(anyhow::Error::msg)
+        })
+    }
+}
+
+struct WorkspacePluginAgentAdapter {
+    registry: Arc<workspace_plugins::PendingPluginPermissionRegistry>,
+    context: workspace_plugins::PluginRuntimeContext,
+    store_path: PathBuf,
+}
+
+impl AgentPluginContributionAdapter for WorkspacePluginAgentAdapter {
+    fn invoke<'a>(
+        &'a self,
+        contribution_id: &'a str,
+        input: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut store = Store::open(&self.store_path)
+                .context("opening Store for Agent plugin contribution")?;
+            self.registry.invoke_file_contribution(
+                &self.context,
+                contribution_id,
+                rho_extension_runtime::ContributionInvocationOrigin::AgentTool,
+                input,
+                &mut store,
+            )
+        })
+    }
+}
+
+async fn snapshot_workspace_with_state(state: &AppState) -> Result<Value, String> {
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Candidate {
+        let context = active_context(state).await.map_err(display_error)?;
+        let identity = context.lock().await.broker.identity().clone();
+        return call_extension_workspace_snapshot(
+            state.extension_host.as_ref(),
+            context,
+            expected_workspace(&identity),
+            ExecutionOrigin::System,
+            None,
+        )
+        .await;
+    }
     let session = active_session(&state).await.map_err(display_error)?;
     let context = active_context(&state).await.map_err(display_error)?;
     let mut context = context.lock().await;
@@ -3453,97 +3897,6 @@ async fn respond_environment_operation(
 }
 
 #[tauri::command]
-async fn list_runs(
-    limit: Option<usize>,
-    state: State<'_, AppState>,
-) -> Result<Vec<RunSummary>, String> {
-    let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .list_runs(&project_root, limit)
-        .map_err(display_error)
-}
-
-#[tauri::command]
-async fn list_problems(
-    limit: Option<usize>,
-    state: State<'_, AppState>,
-) -> Result<Vec<ProblemSummary>, String> {
-    let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .list_problems(&project_root, limit)
-        .map_err(display_error)
-}
-
-#[tauri::command]
-async fn get_run_detail(
-    run_id: String,
-    state: State<'_, AppState>,
-) -> Result<Option<RunDetail>, String> {
-    let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .get_run_detail(&project_root, &run_id)
-        .map_err(display_error)
-}
-
-#[tauri::command]
-async fn compare_runs(
-    left_run_id: String,
-    right_run_id: String,
-    state: State<'_, AppState>,
-) -> Result<CompareRunsResponse, String> {
-    let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .compare_runs(&project_root, &left_run_id, &right_run_id)
-        .map_err(display_error)
-}
-
-#[tauri::command]
-async fn audit_reproducibility(
-    scope: String,
-    reference_snapshot_id: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<AuditResponse, String> {
-    let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    let audit_scope = if scope == "project" {
-        AuditScope::Project
-    } else if scope == "project_current" {
-        AuditScope::CurrentProject
-    } else if let Some(rest) = scope.strip_prefix("run:") {
-        AuditScope::Run(rest.to_string())
-    } else if let Some(rest) = scope.strip_prefix("artifact:") {
-        AuditScope::Artifact(rest.to_string())
-    } else {
-        return Err(format!(
-            "invalid audit scope: {scope} (expected 'project', 'project_current', 'run:<id>', or 'artifact:<id>')"
-        ));
-    };
-    let store = read_store(&state).map_err(display_error)?;
-    contain_audit_panic(|| {
-        store.audit_reproducibility(
-            audit_scope,
-            &project_root,
-            reference_snapshot_id.as_deref(),
-            &AuditLimits::default(),
-        )
-    })
-}
-
-fn contain_audit_panic<T>(operation: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)).map_err(|_| {
-        "The project reproducibility check failed unexpectedly. Try the check again.".to_string()
-    })
-}
-
-#[tauri::command]
 async fn editor_package_functions(
     packages: Option<Vec<String>>,
     limit: Option<usize>,
@@ -3990,9 +4343,10 @@ async fn clear_artifact_records(
     let context = active_context(&state).await.map_err(display_error)?;
     let workspace_id = context.lock().await.broker.identity().workspace_id.clone();
     let mut store = read_store(&state).map_err(display_error)?;
-    let deleted = store
+    let project_root = root.to_string_lossy();
+    let deleted = ProjectMutationService::new(&mut store)
         .clear_artifact_records(
-            &root.to_string_lossy().replace('\\', "/"),
+            project_root.as_ref(),
             Some(&workspace_id),
             session_only.unwrap_or(false),
         )
@@ -4010,9 +4364,9 @@ async fn clear_plot_artifacts(
     let context = active_context(&state).await.map_err(display_error)?;
     let workspace_id = context.lock().await.broker.identity().workspace_id.clone();
     let mut store = read_store(&state).map_err(display_error)?;
-    let deleted = store
+    let deleted = ProjectMutationService::new(&mut store)
         .clear_plot_artifacts(
-            Some(&project_root),
+            &project_root,
             Some(&workspace_id),
             session_only.unwrap_or(true),
         )
@@ -4088,9 +4442,9 @@ async fn create_evidence_entry(
     state: State<'_, AppState>,
 ) -> Result<EvidenceEntry, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
+    let project_root = root.to_string_lossy().into_owned();
     let mut store = read_store(&state).map_err(display_error)?;
-    store
+    ProjectMutationService::new(&mut store)
         .create_evidence_entry(&EvidenceEntryDraft {
             project_root,
             title,
@@ -4132,10 +4486,10 @@ async fn get_evidence_entry(
 #[tauri::command]
 async fn delete_evidence_entry(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
+    let project_root = root.to_string_lossy();
     let mut store = read_store(&state).map_err(display_error)?;
-    store
-        .delete_evidence_entry(&project_root, id)
+    ProjectMutationService::new(&mut store)
+        .delete_evidence_entry(project_root.as_ref(), id)
         .map_err(display_error)
 }
 
@@ -4462,6 +4816,9 @@ async fn start_agent_turn(
     .map_err(display_error)?;
     let auto_approve = task_kind == "agent_turn" && auto_approve.unwrap_or(false) && mode == "act";
     let conversation_id;
+    let plugin_runtime_context;
+    let plugin_projection;
+    let mut agent_runtime_profile = resolved_model.runtime_profile.clone();
     {
         let mut context_guard = context.lock().await;
         let identity = context_guard.broker.identity().clone();
@@ -4471,6 +4828,25 @@ async fn start_agent_turn(
             .map_err(display_error)?
             .context("Cannot start Agent without an active project identity")
             .map_err(display_error)?;
+        plugin_runtime_context = workspace_plugins::PluginRuntimeContext {
+            app_data_dir: config.data_dir.clone(),
+            project_scope_id: extension_project_scope_id(&project_root).map_err(display_error)?,
+            project_root: project_root.clone(),
+            project_revision: i64::try_from(identity.project_revision)
+                .context("project revision exceeds the plugin contribution range")
+                .map_err(display_error)?,
+            workspace: Some(WorkspaceGrantIdentity {
+                workspace_id: identity.workspace_id.clone(),
+                kernel_instance_id: identity.kernel_instance_id.clone(),
+                state_revision: identity.state_revision,
+                project_revision: identity.project_revision,
+            }),
+        };
+        plugin_projection = state
+            .plugin_permissions
+            .agent_projection(&plugin_runtime_context, &mut context_guard.store)
+            .map_err(display_error)?;
+        agent_runtime_profile.plugin_tools = plugin_projection.tools.clone();
         let turn_draft = AgentTurnDraft {
             turn_id: turn_id.clone(),
             project_root: project_root.clone(),
@@ -4531,7 +4907,9 @@ async fn start_agent_turn(
                     "provider_display_name": resolved_model.provider_display_name,
                     "effective_model": resolved_model.effective_model_ref,
                     "model_settings_revision": resolved_model.settings_revision,
-                    "capability_route": resolved_model.route_capability
+                    "capability_route": resolved_model.route_capability,
+                    "plugin_tool_count": plugin_projection.tools.len(),
+                    "plugin_context_count": plugin_projection.context.len()
                 }))
                 .map_err(display_error)?,
             });
@@ -4562,7 +4940,22 @@ async fn start_agent_turn(
     let task_turn_id = turn_id.clone();
     let task_conversation_id = conversation_id.clone();
     let task_agent_tasks = state.agent_tasks.clone();
-    let runtime_profile = resolved_model.runtime_profile.clone();
+    let workspace_snapshot_adapter: Option<Arc<dyn WorkspaceSnapshotAdapter>> =
+        (state.extension_host.mode() == InternalExtensionRuntimeMode::Candidate).then(|| {
+            Arc::new(ExtensionWorkspaceSnapshotAdapter {
+                extension_host: Arc::clone(&state.extension_host),
+                context: Arc::clone(&context),
+            }) as Arc<dyn WorkspaceSnapshotAdapter>
+        });
+    let plugin_contribution_adapter: Option<Arc<dyn AgentPluginContributionAdapter>> =
+        (!agent_runtime_profile.plugin_tools.is_empty()).then(|| {
+            Arc::new(WorkspacePluginAgentAdapter {
+                registry: Arc::clone(&state.plugin_permissions),
+                context: plugin_runtime_context,
+                store_path: config.store_path.clone(),
+            }) as Arc<dyn AgentPluginContributionAdapter>
+        });
+    let runtime_profile = agent_runtime_profile;
     let task_mode = mode.clone();
     let (registered_tx, registered_rx) = oneshot::channel();
     let task = tauri::async_runtime::spawn(async move {
@@ -4586,6 +4979,11 @@ async fn start_agent_turn(
             environment_approvals,
             auto_approve,
             editor_context,
+            AgentRuntimeAdapters {
+                workspace_snapshot: workspace_snapshot_adapter,
+                plugin_contribution: plugin_contribution_adapter,
+            },
+            plugin_projection.context,
         )
         .await;
         task_agent_tasks.lock().await.remove(&task_turn_id);
@@ -4916,10 +5314,10 @@ async fn list_agent_conversations(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentConversationSummary>, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = durable_project_root(&root);
-    read_store(&state)
-        .map_err(display_error)?
-        .list_agent_conversations(&project_root, limit)
+    let project_root = root.to_string_lossy();
+    let store = read_store(&state).map_err(display_error)?;
+    ProjectQueryService::new(&store)
+        .list_agent_conversations(project_root.as_ref(), limit)
         .map_err(display_error)
 }
 
@@ -4948,16 +5346,11 @@ async fn list_agent_turns(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentTurnSummary>, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = durable_project_root(&root);
+    let project_root = root.to_string_lossy();
     let store = read_store(&state).map_err(display_error)?;
-    match conversation_id {
-        Some(conversation_id) => store
-            .list_agent_turns_for_conversation(&project_root, &conversation_id, limit)
-            .map_err(display_error),
-        None => store
-            .list_agent_turns(&project_root, limit)
-            .map_err(display_error),
-    }
+    ProjectQueryService::new(&store)
+        .list_agent_turns(project_root.as_ref(), conversation_id.as_deref(), limit)
+        .map_err(display_error)
 }
 
 #[tauri::command]
@@ -4992,7 +5385,8 @@ async fn delete_agent_conversation_state(conversation_id: &str, state: &AppState
         !state.agent_file_mutations.has_any_turn(&turn_ids),
         "Wait for the selected Conversation's file operation before deleting it."
     );
-    let deleted_turns = store.delete_agent_conversation(&project_root, &conversation_id)?;
+    let deleted_turns = ProjectMutationService::new(&mut store)
+        .delete_agent_conversation(&project_root, &conversation_id)?;
     drop(tasks);
     Ok(json!({
         "status": "deleted",
@@ -5009,10 +5403,10 @@ async fn list_approval_requests(
     state: State<'_, AppState>,
 ) -> Result<Vec<ApprovalRequestSummary>, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .list_approval_requests(&project_root, limit, status.as_deref())
+    let project_root = root.to_string_lossy();
+    let store = read_store(&state).map_err(display_error)?;
+    ProjectQueryService::new(&store)
+        .list_approval_requests(project_root.as_ref(), limit, status.as_deref())
         .map_err(display_error)
 }
 
@@ -5022,10 +5416,10 @@ async fn get_agent_turn_detail(
     state: State<'_, AppState>,
 ) -> Result<Option<AgentTurnDetail>, String> {
     let root = state.project_root.read().await.clone();
-    let project_root = root.to_string_lossy().replace('\\', "/");
-    read_store(&state)
-        .map_err(display_error)?
-        .get_agent_turn_detail(&project_root, &turn_id)
+    let project_root = root.to_string_lossy();
+    let store = read_store(&state).map_err(display_error)?;
+    ProjectQueryService::new(&store)
+        .get_agent_turn_detail(project_root.as_ref(), &turn_id)
         .map_err(display_error)
 }
 
@@ -5167,6 +5561,10 @@ async fn interrupt_all_agent_tasks(
 
 #[tauri::command]
 async fn restart_workspace(state: State<'_, AppState>) -> Result<WorkspaceStatus, String> {
+    let _project_transition = state.project_transition_gate.lock().await;
+    if state.shutdown_started.load(Ordering::SeqCst) {
+        return Err("Rho is closing; Workspace R cannot restart".to_string());
+    }
     interrupt_all_agent_tasks(
         &state,
         "desktop_restart",
@@ -5179,6 +5577,13 @@ async fn restart_workspace(state: State<'_, AppState>) -> Result<WorkspaceStatus
         let root = state.project_root.read().await.clone();
         normalize_project_root(root.to_string_lossy().as_ref())
     };
+    teardown_workspace_plugins_for_boundary(
+        &state,
+        &current_project_root,
+        "project_teardown",
+        "workspace_restarted",
+    )
+    .await;
     let render_job_ids = {
         let mut jobs = state.render_jobs.lock().await;
         jobs.values_mut()
@@ -5212,6 +5617,23 @@ async fn restart_workspace(state: State<'_, AppState>) -> Result<WorkspaceStatus
         run_id
     };
 
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Candidate {
+        let expected_workspace = state.extension_host.scopes().workspace();
+        if let Some(report) = state
+            .extension_host
+            .clear_workspace_scope(expected_workspace)
+            .await
+            .map_err(display_error)?
+        {
+            write_startup_event(json!({
+                "kind": "internal_extension_workspace_restart_dispose",
+                "outcome": report.outcome,
+                "scope_id": report.scope.id,
+                "generation": report.scope.generation,
+            }));
+        }
+    }
+
     let old_context = state.context.lock().await.take();
     let old_session = state.session.write().await.take();
     if active_run_id.is_some() || !render_job_ids.is_empty() {
@@ -5237,9 +5659,8 @@ async fn restart_workspace(state: State<'_, AppState>) -> Result<WorkspaceStatus
     }
     drop(old_session);
     drop(old_context);
-    let status = start_workspace(&state).await.map_err(display_error)?;
-    let root = state.project_root.read().await.clone();
-    sync_workspace_project_root(&state, &root, SwitchTestStep::SyncWorkspace)
+    start_workspace(&state).await.map_err(display_error)?;
+    let status = finalize_workspace_start(&state, true)
         .await
         .map_err(display_error)?;
     if !render_job_ids.is_empty() {
@@ -5459,9 +5880,10 @@ async fn targets_status(state: State<'_, AppState>) -> Result<Value, String> {
     .map_err(display_error)
 }
 
-#[tauri::command]
 async fn shutdown_application(state: &AppState) -> Result<(), String> {
     write_startup_log("Rho desktop shutdown started");
+    state.shutdown_started.store(true, Ordering::SeqCst);
+    let _project_transition = state.project_transition_gate.lock().await;
     interrupt_all_agent_tasks(
         state,
         "desktop_shutdown",
@@ -5473,9 +5895,27 @@ async fn shutdown_application(state: &AppState) -> Result<(), String> {
     if let Err(error) = agent_llm::cancel_test(&state.agent_llm_test_control) {
         write_startup_log(&format!("Agent model test shutdown failed: {error:#}"));
     }
+    agent_llm::clear_session_credentials();
+
+    let plugin_project_root = {
+        let root = state.project_root.read().await.clone();
+        normalize_project_root(root.to_string_lossy().as_ref())
+    };
+    teardown_workspace_plugins_for_boundary(
+        state,
+        &plugin_project_root,
+        "shutdown",
+        "broker_shutdown",
+    )
+    .await;
 
     if let Some(watcher) = state.project_watcher.lock().await.take() {
         watcher.stop();
+    }
+
+    let extension_report = state.extension_host.shutdown().await;
+    if extension_report.outcome == DisposeOutcome::Failed {
+        write_startup_log("Internal extension shutdown completed with leaked resources");
     }
 
     let context = state.context.lock().await.take();
@@ -5567,6 +6007,212 @@ fn read_store(state: &AppState) -> Result<Store> {
     Store::open(&config.store_path).context("opening Rho event store")
 }
 
+async fn teardown_workspace_plugins_for_boundary(
+    state: &AppState,
+    project_root: &str,
+    kind: &str,
+    trigger: &str,
+) {
+    let data_dir = match runtime_config(state) {
+        Ok(config) => config.data_dir,
+        Err(error) => {
+            write_startup_event(json!({
+                "kind": "workspace_plugin_boundary_teardown_unavailable",
+                "trigger": trigger,
+                "reason_code": "runtime_config_unavailable",
+                "message": bounded_diagnostic(&error.to_string()),
+            }));
+            state.plugin_permissions.invalidate_project(project_root);
+            return;
+        }
+    };
+    let context = match active_context(state).await {
+        Ok(context) => context,
+        Err(error) => {
+            write_startup_event(json!({
+                "kind": "workspace_plugin_boundary_teardown_unavailable",
+                "trigger": trigger,
+                "reason_code": "workspace_context_unavailable",
+                "message": bounded_diagnostic(&error.to_string()),
+            }));
+            state.plugin_permissions.invalidate_project(project_root);
+            return;
+        }
+    };
+    let mut context = context.lock().await;
+    let identity = context.broker.identity().clone();
+    let plugin_context =
+        match workspace_plugin_runtime_context(data_dir, project_root.to_string(), &identity) {
+            Ok(context) => context,
+            Err(error) => {
+                drop(context);
+                write_startup_event(json!({
+                    "kind": "workspace_plugin_boundary_teardown_unavailable",
+                    "trigger": trigger,
+                    "reason_code": "plugin_context_unavailable",
+                    "message": bounded_diagnostic(&error.to_string()),
+                }));
+                state.plugin_permissions.invalidate_project(project_root);
+                return;
+            }
+        };
+    let report =
+        state
+            .plugin_permissions
+            .teardown_project(&plugin_context, kind, &mut context.store);
+    if let Err(error) = context
+        .store
+        .recover_pending_plugin_permission_requests(project_root, trigger)
+    {
+        write_startup_event(json!({
+            "kind": "workspace_plugin_boundary_permission_recovery_failed",
+            "trigger": trigger,
+            "message": bounded_diagnostic(&error.to_string()),
+        }));
+    }
+    if let Err(error) = context
+        .store
+        .recover_transient_plugin_permission_grants(project_root, trigger)
+    {
+        write_startup_event(json!({
+            "kind": "workspace_plugin_boundary_grant_recovery_failed",
+            "trigger": trigger,
+            "message": bounded_diagnostic(&error.to_string()),
+        }));
+    }
+    drop(context);
+    write_startup_event(json!({
+        "kind": "workspace_plugin_boundary_teardown",
+        "trigger": trigger,
+        "report": report,
+    }));
+}
+
+async fn reconcile_workspace_plugins_for_boundary(
+    state: &AppState,
+    project_root: &str,
+    trigger: &str,
+) {
+    let data_dir = match runtime_config(state) {
+        Ok(config) => config.data_dir,
+        Err(error) => {
+            write_startup_event(json!({
+                "kind": "workspace_plugin_reconciliation_unavailable",
+                "trigger": trigger,
+                "reason_code": "runtime_config_unavailable",
+                "message": bounded_diagnostic(&error.to_string()),
+            }));
+            return;
+        }
+    };
+    let context = match active_context(state).await {
+        Ok(context) => context,
+        Err(error) => {
+            write_startup_event(json!({
+                "kind": "workspace_plugin_reconciliation_unavailable",
+                "trigger": trigger,
+                "reason_code": "workspace_context_unavailable",
+                "message": bounded_diagnostic(&error.to_string()),
+            }));
+            return;
+        }
+    };
+    let mut context = context.lock().await;
+    let identity = context.broker.identity().clone();
+    match workspace_plugin_runtime_context(data_dir, project_root.to_string(), &identity) {
+        Ok(plugin_context) => {
+            let report = state
+                .plugin_permissions
+                .reconcile_project(&plugin_context, &mut context.store);
+            let post_revision_report = if report.project_files_changed {
+                context.broker.project_changed();
+                let identity = context.broker.identity().clone();
+                if let Err(error) = context.store.save_identity(&identity) {
+                    write_startup_event(json!({
+                        "kind": "workspace_plugin_recovery_revision_failed",
+                        "trigger": trigger,
+                        "message": bounded_diagnostic(&error.to_string()),
+                    }));
+                    None
+                } else {
+                    workspace_plugin_runtime_context(
+                        plugin_context.app_data_dir.clone(),
+                        project_root.to_string(),
+                        &identity,
+                    )
+                    .ok()
+                    .map(|fresh_context| {
+                        state
+                            .plugin_permissions
+                            .reconcile_project(&fresh_context, &mut context.store)
+                    })
+                }
+            } else {
+                None
+            };
+            drop(context);
+            write_startup_event(json!({
+                "kind": "workspace_plugin_reconciliation",
+                "trigger": trigger,
+                "report": report,
+                "post_revision_report": post_revision_report,
+            }));
+        }
+        Err(error) => {
+            drop(context);
+            write_startup_event(json!({
+                "kind": "workspace_plugin_reconciliation_unavailable",
+                "trigger": trigger,
+                "reason_code": "runtime_context_unavailable",
+                "message": bounded_diagnostic(&error.to_string()),
+            }));
+        }
+    }
+}
+
+async fn monitor_workspace_plugin_heartbeats(app: AppHandle) {
+    loop {
+        tokio::time::sleep(DEFAULT_HEARTBEAT_INTERVAL).await;
+        let state = app.state::<AppState>();
+        if state.shutdown_started.load(Ordering::SeqCst) {
+            break;
+        }
+        let _project_transition = state.project_transition_gate.lock().await;
+        if state.shutdown_started.load(Ordering::SeqCst) {
+            break;
+        }
+        let project_root = {
+            let root = state.project_root.read().await.clone();
+            normalize_project_root(root.to_string_lossy().as_ref())
+        };
+        let data_dir = match runtime_config(&state) {
+            Ok(config) => config.data_dir,
+            Err(_) => continue,
+        };
+        let context = match active_context(&state).await {
+            Ok(context) => context,
+            Err(_) => continue,
+        };
+        let mut context = context.lock().await;
+        let identity = context.broker.identity().clone();
+        let plugin_context =
+            match workspace_plugin_runtime_context(data_dir, project_root, &identity) {
+                Ok(context) => context,
+                Err(_) => continue,
+            };
+        let report = state
+            .plugin_permissions
+            .sweep_project_heartbeats(&plugin_context, &mut context.store);
+        drop(context);
+        if report.checked > 0 || report.failures > 0 {
+            write_startup_event(json!({
+                "kind": "workspace_plugin_heartbeat_sweep",
+                "report": report,
+            }));
+        }
+    }
+}
+
 fn durable_project_root(root: &Path) -> String {
     normalize_project_root(root.to_string_lossy().as_ref())
 }
@@ -5624,6 +6270,12 @@ async fn start_workspace(state: &AppState) -> Result<WorkspaceStatus> {
     store
         .recover_incomplete_environment_operations()
         .context("recovering incomplete environment operations after desktop restart")?;
+    store
+        .recover_pending_plugin_permission_requests(&normalized_project_root, "broker_restart")
+        .context("recovering pending workspace plugin permission requests")?;
+    store
+        .recover_transient_plugin_permission_grants(&normalized_project_root, "broker_restart")
+        .context("recovering one-shot workspace plugin grants")?;
     let file_recovery = recover_incomplete_agent_file_mutations(
         &mut store,
         &project_root,
@@ -5648,10 +6300,81 @@ async fn start_workspace(state: &AppState) -> Result<WorkspaceStatus> {
         &config.bridge_package,
     )
     .await?;
+    let plugin_identity = broker.identity().clone();
+    match workspace_plugin_runtime_context(
+        config.data_dir.clone(),
+        normalized_project_root.clone(),
+        &plugin_identity,
+    ) {
+        Ok(plugin_context) => {
+            let plugin_reconciliation = state
+                .plugin_permissions
+                .reconcile_project(&plugin_context, &mut store);
+            let post_revision_reconciliation = if plugin_reconciliation.project_files_changed {
+                broker.project_changed();
+                store.save_identity(broker.identity())?;
+                let fresh_context = workspace_plugin_runtime_context(
+                    config.data_dir.clone(),
+                    normalized_project_root.clone(),
+                    broker.identity(),
+                )?;
+                Some(
+                    state
+                        .plugin_permissions
+                        .reconcile_project(&fresh_context, &mut store),
+                )
+            } else {
+                None
+            };
+            write_startup_event(json!({
+                "kind": "workspace_plugin_reconciliation",
+                "trigger": "workspace_start",
+                "report": plugin_reconciliation,
+                "post_revision_report": post_revision_reconciliation,
+            }));
+        }
+        Err(error) => write_startup_event(json!({
+            "kind": "workspace_plugin_reconciliation_unavailable",
+            "trigger": "workspace_start",
+            "reason_code": "runtime_context_unavailable",
+            "message": bounded_diagnostic(&error.to_string()),
+        })),
+    }
     let status = status_from(&config, &session, Some(broker.identity()))?;
-    *state.context.lock().await = Some(Arc::new(Mutex::new(CoordinatorRuntime { broker, store })));
+    let context = Arc::new(Mutex::new(CoordinatorRuntime { broker, store }));
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Candidate {
+        ensure_extension_project_scope(state, &normalized_project_root)
+            .await?
+            .context("candidate extension project scope is unavailable")?;
+    }
+    *state.context.lock().await = Some(context);
     *state.session.write().await = Some(session);
     Ok(status)
+}
+
+async fn finalize_workspace_start(
+    state: &AppState,
+    synchronize_project_root: bool,
+) -> Result<WorkspaceStatus> {
+    let candidate = state.extension_host.mode() == InternalExtensionRuntimeMode::Candidate;
+    if synchronize_project_root {
+        let root = state.project_root.read().await.clone();
+        sync_workspace_project_root(state, &root, SwitchTestStep::SyncWorkspace).await?;
+    }
+    if candidate {
+        let project =
+            state.extension_host.scopes().project().context(
+                "candidate extension project scope is unavailable after Workspace start",
+            )?;
+        let session = active_session(state).await?;
+        let context = active_context(state).await?;
+        publish_extension_workspace_scope(state, &project, session, context).await?;
+    }
+    let config = runtime_config(state)?;
+    let session = active_session(state).await?;
+    let context = active_context(state).await?;
+    let identity = context.lock().await.broker.identity().clone();
+    status_from(&config, session.as_ref(), Some(&identity))
 }
 
 async fn request_run_interrupt(run_id: Option<String>, state: &AppState) -> Result<Value> {
@@ -5667,7 +6390,7 @@ async fn request_run_interrupt(run_id: Option<String>, state: &AppState) -> Resu
             .context("No active run is available to interrupt")?,
     };
     ensure!(
-        store
+        ProjectMutationService::new(&mut store)
             .request_cancel(&project_root, &target)
             .context("marking run as cancel-requested")?,
         "Run is not active: {target}"
@@ -5688,6 +6411,556 @@ fn parse_execution_origin(origin: &str) -> ExecutionOrigin {
         "agent" => ExecutionOrigin::Agent,
         "system" => ExecutionOrigin::System,
         _ => ExecutionOrigin::User,
+    }
+}
+
+fn run_history_source_capability_id() -> CapabilityId {
+    CapabilityId::new("source.project.run-history")
+        .expect("built-in Run History source capability must be valid")
+}
+
+fn runs_broker_capability_id() -> CapabilityId {
+    CapabilityId::new("service.broker.runs").expect("built-in Runs broker capability must be valid")
+}
+
+fn runs_broker_operation_id() -> OperationId {
+    OperationId::new("service.broker.runs.list")
+        .expect("built-in Runs broker operation must be valid")
+}
+
+fn workspace_snapshot_tool_capability_id() -> CapabilityId {
+    CapabilityId::new("tool.workspace.snapshot")
+        .expect("built-in Workspace Snapshot tool capability must be valid")
+}
+
+fn workspace_probe_broker_capability_id() -> CapabilityId {
+    CapabilityId::new("service.broker.workspace-probe")
+        .expect("built-in Workspace probe broker capability must be valid")
+}
+
+fn workspace_probe_broker_operation_id() -> OperationId {
+    OperationId::new("service.broker.workspace-probe.snapshot")
+        .expect("built-in Workspace probe operation must be valid")
+}
+
+fn project_file_viewer_capability_id() -> CapabilityId {
+    CapabilityId::new("ui.viewer.project-file")
+        .expect("built-in project file viewer capability must be valid")
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkspaceOperation {
+    Snapshot {
+        expected_workspace: rho_protocol::ExpectedWorkspace,
+        origin: ExecutionOrigin,
+        execution_id: Option<String>,
+    },
+}
+
+struct WorkspaceSnapshotPlugin {
+    descriptor: PluginDescriptor,
+}
+
+impl WorkspaceSnapshotPlugin {
+    fn new() -> Self {
+        let mut descriptor = PluginDescriptor::new(
+            rho_extension_runtime::PluginId::new("org.yulab.rho.workspace-snapshot-tool")
+                .expect("built-in Workspace Snapshot plugin ID must be valid"),
+            PluginVersion::parse("1.0.0")
+                .expect("built-in Workspace Snapshot version must be valid"),
+            vec![rho_extension_runtime::ScopePolicy::workspace_kind()],
+        );
+        descriptor.provides = vec![CapabilityDeclaration::new(
+            workspace_snapshot_tool_capability_id(),
+            1,
+        )];
+        descriptor.requires = vec![CapabilityRequirement::new(
+            workspace_probe_broker_capability_id(),
+            1,
+        )];
+        Self { descriptor }
+    }
+}
+
+impl InternalPlugin for WorkspaceSnapshotPlugin {
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
+
+    fn activate<'a>(
+        &'a self,
+        context: PluginContext<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ActivationError>> + Send + 'a>> {
+        Box::pin(async move {
+            context
+                .effects
+                .register_workspace_tool(
+                    context.registry,
+                    workspace_snapshot_tool_capability_id(),
+                    Arc::new(WorkspaceSnapshotToolHandler {
+                        broker: Arc::clone(&context.broker),
+                    }),
+                )
+                .map_err(|error| {
+                    ActivationError::new("workspace_snapshot_registration", error.to_string())
+                })?;
+            Ok(())
+        })
+    }
+}
+
+struct WorkspaceSnapshotToolHandler {
+    broker: Arc<dyn BrokerFacade>,
+}
+
+impl WorkspaceToolHandler for WorkspaceSnapshotToolHandler {
+    fn call<'a>(
+        &'a self,
+        request: BoundedJson,
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedJson, BrokerError>> + Send + 'a>> {
+        let broker = Arc::clone(&self.broker);
+        Box::pin(async move {
+            let operation: WorkspaceOperation = serde_json::from_value(request.into_value())
+                .map_err(|error| {
+                    BrokerError::rejected("workspace_snapshot_request_invalid", error.to_string())
+                })?;
+            let request = BrokerRequest::new(
+                workspace_probe_broker_operation_id(),
+                serde_json::to_value(operation).map_err(|error| {
+                    BrokerError::rejected("workspace_snapshot_request_encode", error.to_string())
+                })?,
+                BrokerResponseClass::WorkspaceSnapshot,
+            )
+            .map_err(BrokerError::from)?;
+            Ok(broker.call(request).await?.payload)
+        })
+    }
+}
+
+struct ProjectFileViewerPlugin {
+    descriptor: PluginDescriptor,
+}
+
+impl ProjectFileViewerPlugin {
+    fn new() -> Self {
+        let mut descriptor = PluginDescriptor::new(
+            rho_extension_runtime::PluginId::new("org.yulab.rho.project-file-viewer")
+                .expect("built-in project file viewer plugin ID must be valid"),
+            PluginVersion::parse("1.0.0")
+                .expect("built-in project file viewer version must be valid"),
+            vec![rho_extension_runtime::ScopePolicy::application_kind()],
+        );
+        descriptor.provides = vec![CapabilityDeclaration::new(
+            project_file_viewer_capability_id(),
+            1,
+        )];
+        Self { descriptor }
+    }
+}
+
+impl InternalPlugin for ProjectFileViewerPlugin {
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
+
+    fn activate<'a>(
+        &'a self,
+        context: PluginContext<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ActivationError>> + Send + 'a>> {
+        Box::pin(async move {
+            context
+                .effects
+                .register_project_file_viewer(
+                    context.registry,
+                    project_file_viewer_capability_id(),
+                    ProjectFileViewerContribution::new(
+                        vec![
+                            "application/json".to_string(),
+                            "image/gif".to_string(),
+                            "image/jpeg".to_string(),
+                            "image/png".to_string(),
+                            "image/webp".to_string(),
+                            "text/csv".to_string(),
+                            "text/html".to_string(),
+                            "text/markdown".to_string(),
+                            "text/plain".to_string(),
+                            "text/tab-separated-values".to_string(),
+                            "text/x-r".to_string(),
+                            "text/x-r-markdown".to_string(),
+                        ],
+                        MAX_VIEWER_FILE_BYTES as usize,
+                        MAX_VIEWER_HTML_BYTES as usize,
+                    ),
+                )
+                .map_err(|error| {
+                    ActivationError::new("project_file_viewer_registration", error.to_string())
+                })?;
+            Ok(())
+        })
+    }
+}
+
+struct RunHistoryPlugin {
+    descriptor: PluginDescriptor,
+}
+
+impl RunHistoryPlugin {
+    fn new() -> Self {
+        let mut descriptor = PluginDescriptor::new(
+            rho_extension_runtime::PluginId::new("org.yulab.rho.run-history")
+                .expect("built-in Run History plugin ID must be valid"),
+            PluginVersion::parse("1.0.0").expect("built-in Run History version must be valid"),
+            vec![rho_extension_runtime::ScopePolicy::project_kind()],
+        );
+        descriptor.provides = vec![CapabilityDeclaration::new(
+            run_history_source_capability_id(),
+            1,
+        )];
+        descriptor.requires = vec![CapabilityRequirement::new(runs_broker_capability_id(), 1)];
+        Self { descriptor }
+    }
+}
+
+impl InternalPlugin for RunHistoryPlugin {
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
+
+    fn activate<'a>(
+        &'a self,
+        context: PluginContext<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ActivationError>> + Send + 'a>> {
+        Box::pin(async move {
+            context
+                .effects
+                .register_source(
+                    context.registry,
+                    run_history_source_capability_id(),
+                    Arc::new(RunHistorySourceHandler {
+                        broker: Arc::clone(&context.broker),
+                    }),
+                )
+                .map_err(|error| {
+                    ActivationError::new("run_history_registration", error.to_string())
+                })?;
+            Ok(())
+        })
+    }
+}
+
+struct RunHistorySourceHandler {
+    broker: Arc<dyn BrokerFacade>,
+}
+
+impl SourceHandler for RunHistorySourceHandler {
+    fn call<'a>(
+        &'a self,
+        request: BoundedJson,
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedJson, BrokerError>> + Send + 'a>> {
+        let broker = Arc::clone(&self.broker);
+        Box::pin(async move {
+            let request = BrokerRequest {
+                operation_id: runs_broker_operation_id(),
+                payload: request,
+                response_class: BrokerResponseClass::Generic,
+            };
+            Ok(broker.call(request).await?.payload)
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunHistoryListRequest {
+    limit: Option<usize>,
+}
+
+struct RunHistoryBrokerFacade {
+    store_path: PathBuf,
+    project_root: String,
+}
+
+impl RunHistoryBrokerFacade {
+    fn call_sync(&self, request: BrokerRequest) -> Result<BrokerResponse, BrokerError> {
+        if request.operation_id != runs_broker_operation_id() {
+            return Err(BrokerError::Unavailable {
+                operation_id: request.operation_id,
+            });
+        }
+        let arguments: RunHistoryListRequest =
+            serde_json::from_value(request.payload.value().clone()).map_err(|error| {
+                BrokerError::rejected("runs_request_invalid", error.to_string())
+            })?;
+        let store = Store::open(&self.store_path)
+            .map_err(|error| BrokerError::rejected("runs_store_open", error.to_string()))?;
+        let runs = store
+            .list_runs(&self.project_root, arguments.limit)
+            .map_err(|error| BrokerError::rejected("runs_list_failed", error.to_string()))?;
+        let value = serde_json::to_value(runs)
+            .map_err(|error| BrokerError::rejected("runs_response_encode", error.to_string()))?;
+        BrokerResponse::new(value, &request).map_err(BrokerError::from)
+    }
+}
+
+impl BrokerFacade for RunHistoryBrokerFacade {
+    fn call<'a>(
+        &'a self,
+        request: BrokerRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<BrokerResponse, BrokerError>> + Send + 'a>> {
+        let result = self.call_sync(request);
+        Box::pin(async move { result })
+    }
+}
+
+struct WorkspaceSnapshotBrokerFacade {
+    session: Arc<ArkSession>,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+}
+
+impl BrokerFacade for WorkspaceSnapshotBrokerFacade {
+    fn call<'a>(
+        &'a self,
+        request: BrokerRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<BrokerResponse, BrokerError>> + Send + 'a>> {
+        Box::pin(async move {
+            if request.operation_id != workspace_probe_broker_operation_id() {
+                return Err(BrokerError::Unavailable {
+                    operation_id: request.operation_id,
+                });
+            }
+            let operation: WorkspaceOperation =
+                serde_json::from_value(request.payload.value().clone()).map_err(|error| {
+                    BrokerError::rejected("workspace_probe_request_invalid", error.to_string())
+                })?;
+            let WorkspaceOperation::Snapshot {
+                expected_workspace,
+                origin,
+                execution_id,
+            } = operation;
+            let payload = json!({
+                "arguments": {},
+                "expected_workspace": expected_workspace,
+            });
+            let mut context = self.context.lock().await;
+            let CoordinatorRuntime { broker, store } = &mut *context;
+            let value = dispatch_workspace_request_with_execution_id(
+                "workspace.snapshot",
+                &payload,
+                origin,
+                self.session.as_ref(),
+                broker,
+                store,
+                execution_id.as_deref(),
+            )
+            .await
+            .map_err(|error| {
+                BrokerError::rejected("workspace_snapshot_dispatch_failed", error.to_string())
+            })?;
+            BrokerResponse::new(value, &request).map_err(BrokerError::from)
+        })
+    }
+}
+
+fn extension_project_scope_id(normalized_project_root: &str) -> Result<ScopeId> {
+    ScopeId::new(format!("project.{}", text_sha256(normalized_project_root)))
+        .map_err(|error| anyhow!("creating extension project scope identity failed: {error}"))
+}
+
+fn workspace_plugin_runtime_context(
+    data_dir: PathBuf,
+    project_root: String,
+    identity: &rho_protocol::WorkspaceIdentity,
+) -> Result<workspace_plugins::PluginRuntimeContext> {
+    Ok(workspace_plugins::PluginRuntimeContext {
+        app_data_dir: data_dir,
+        project_revision: i64::try_from(identity.project_revision)
+            .context("project revision exceeds plugin recovery range")?,
+        project_scope_id: extension_project_scope_id(&project_root)?,
+        project_root,
+        workspace: Some(WorkspaceGrantIdentity {
+            workspace_id: identity.workspace_id.clone(),
+            kernel_instance_id: identity.kernel_instance_id.clone(),
+            state_revision: identity.state_revision,
+            project_revision: identity.project_revision,
+        }),
+    })
+}
+
+fn extension_workspace_scope_id(
+    project: &ScopeSnapshot,
+    workspace: &rho_protocol::WorkspaceIdentity,
+) -> Result<ScopeId> {
+    ScopeId::new(format!(
+        "workspace.{}",
+        text_sha256(&format!(
+            "{}\0{}\0{}",
+            project.identity().id,
+            workspace.workspace_id,
+            workspace.kernel_instance_id
+        ))
+    ))
+    .map_err(|error| anyhow!("creating extension Workspace scope identity failed: {error}"))
+}
+
+fn internal_plugin_inventory() -> Vec<Arc<dyn InternalPlugin>> {
+    vec![
+        Arc::new(ProjectFileViewerPlugin::new()),
+        Arc::new(RunHistoryPlugin::new()),
+        Arc::new(WorkspaceSnapshotPlugin::new()),
+    ]
+}
+
+fn internal_plugins_for_scope(scope_kind: &ScopeKindId) -> Vec<Arc<dyn InternalPlugin>> {
+    internal_plugin_inventory()
+        .into_iter()
+        .filter(|plugin| plugin.descriptor().allowed_scopes == [scope_kind.clone()])
+        .collect()
+}
+
+async fn ensure_extension_project_scope(
+    state: &AppState,
+    normalized_project_root: &str,
+) -> Result<Option<Arc<ScopeSnapshot>>> {
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Legacy {
+        return Ok(None);
+    }
+    let expected = state.extension_host.scopes().project();
+    let scope_id = extension_project_scope_id(normalized_project_root)?;
+    if let Some(current) = expected.as_ref()
+        && current.identity().id == scope_id
+    {
+        return Ok(expected);
+    }
+    ensure!(
+        state.extension_host.scopes().workspace().is_none(),
+        "Cannot replace an extension project scope while its Workspace child is active"
+    );
+    let config = runtime_config(state)?;
+    let candidate = state
+        .extension_host
+        .build_project_candidate(
+            scope_id,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::project_kind()),
+            Arc::new(RunHistoryBrokerFacade {
+                store_path: config.store_path,
+                project_root: normalized_project_root.to_string(),
+            }),
+        )
+        .await
+        .context("building extension project scope for Workspace startup")?;
+    state
+        .extension_host
+        .publish_project_candidate(expected, candidate.clone())
+        .await
+        .context("publishing extension project scope for Workspace startup")?;
+    Ok(Some(candidate))
+}
+
+async fn build_extension_workspace_candidate(
+    state: &AppState,
+    parent: &Arc<ScopeSnapshot>,
+    session: Arc<ArkSession>,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+) -> Result<Option<Arc<ScopeSnapshot>>> {
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Legacy {
+        return Ok(None);
+    }
+    let identity = context.lock().await.broker.identity().clone();
+    let candidate = state
+        .extension_host
+        .build_workspace_candidate(
+            parent,
+            extension_workspace_scope_id(parent, &identity)?,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::workspace_kind()),
+            Arc::new(WorkspaceSnapshotBrokerFacade { session, context }),
+        )
+        .await
+        .context("building extension Workspace candidate")?;
+    Ok(Some(candidate))
+}
+
+async fn publish_extension_workspace_scope(
+    state: &AppState,
+    parent: &Arc<ScopeSnapshot>,
+    session: Arc<ArkSession>,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+) -> Result<Option<Arc<ScopeSnapshot>>> {
+    let expected = state.extension_host.scopes().workspace();
+    let candidate = build_extension_workspace_candidate(state, parent, session, context).await?;
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    state
+        .extension_host
+        .publish_workspace_candidate(expected, candidate.clone())
+        .await
+        .context("publishing extension Workspace scope")?;
+    Ok(Some(candidate))
+}
+
+struct PreparedExtensionProjectCandidate {
+    expected_project: Option<Arc<ScopeSnapshot>>,
+    project_candidate: Option<Arc<ScopeSnapshot>>,
+    expected_workspace: Option<Arc<ScopeSnapshot>>,
+    workspace_candidate: Option<Arc<ScopeSnapshot>>,
+}
+
+async fn prepare_extension_project_candidate(
+    state: &AppState,
+    normalized_project_root: &str,
+) -> Result<PreparedExtensionProjectCandidate> {
+    if state.extension_host.mode() == InternalExtensionRuntimeMode::Legacy {
+        return Ok(PreparedExtensionProjectCandidate {
+            expected_project: None,
+            project_candidate: None,
+            expected_workspace: None,
+            workspace_candidate: None,
+        });
+    }
+    let _ = maybe_handle_switch_test_directive(state, SwitchTestStep::BuildExtensionCandidate)?;
+    let expected_project = state.extension_host.scopes().project();
+    maybe_handle_switch_test_directive(state, SwitchTestStep::ActivateExtensionCandidate)
+        .context("activating required extension project candidate")?;
+    let config = runtime_config(state)?;
+    let project_candidate = state
+        .extension_host
+        .build_project_candidate(
+            extension_project_scope_id(normalized_project_root)?,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::project_kind()),
+            Arc::new(RunHistoryBrokerFacade {
+                store_path: config.store_path,
+                project_root: normalized_project_root.to_string(),
+            }),
+        )
+        .await
+        .context("building required extension project candidate")?;
+    Ok(PreparedExtensionProjectCandidate {
+        expected_project,
+        project_candidate: Some(project_candidate),
+        expected_workspace: state.extension_host.scopes().workspace(),
+        workspace_candidate: None,
+    })
+}
+
+async fn rollback_extension_project_candidates(
+    state: &AppState,
+    project_candidate: Option<&Arc<ScopeSnapshot>>,
+    workspace_candidate: Option<&Arc<ScopeSnapshot>>,
+    reason_code: &str,
+) {
+    for candidate in [workspace_candidate, project_candidate]
+        .into_iter()
+        .flatten()
+    {
+        let report = state.extension_host.rollback_candidate(candidate).await;
+        write_startup_event(json!({
+            "kind": "internal_extension_candidate_rollback",
+            "reason_code": reason_code,
+            "scope_id": candidate.identity().id,
+            "generation": candidate.identity().generation,
+            "outcome": report.outcome,
+        }));
     }
 }
 
@@ -5713,6 +6986,10 @@ where
     F: FnOnce(&Path) -> Result<ProjectWatcherControl>,
 {
     let _project_transition = state.project_transition_gate.lock().await;
+    ensure!(
+        !state.shutdown_started.load(Ordering::SeqCst),
+        "Rho is closing; project switching is unavailable"
+    );
     let target_session =
         session_snapshot.unwrap_or_else(|| state.project_store.load_session_or_default(&root));
     if let Some(blocker) = project_switch_blocker(state).await? {
@@ -5729,12 +7006,60 @@ where
     let project = list_project_files(&root)?;
     let normalized_root = normalize_project_root(root.to_string_lossy().as_ref());
     let previous_ui_root = state.project_root.read().await.clone();
+    let previous_normalized_root =
+        normalize_project_root(previous_ui_root.to_string_lossy().as_ref());
     let previous_session = state
         .project_store
         .load_session_or_default(&previous_ui_root);
     let previous_store_root = read_store(state)?.active_project_root()?;
+    let mut prepared_extension =
+        prepare_extension_project_candidate(state, &normalized_root).await?;
 
-    sync_workspace_project_root(state, &root, SwitchTestStep::SyncWorkspace).await?;
+    if let Err(error) =
+        sync_workspace_project_root(state, &root, SwitchTestStep::SyncWorkspace).await
+    {
+        rollback_extension_project_candidates(
+            state,
+            prepared_extension.project_candidate.as_ref(),
+            prepared_extension.workspace_candidate.as_ref(),
+            "project_switch_workspace_failed",
+        )
+        .await;
+        return Err(error);
+    }
+
+    if let Some(project_candidate) = prepared_extension.project_candidate.as_ref() {
+        let session = state.session.read().await.clone();
+        let context = state.context.lock().await.clone();
+        let workspace_candidate = match (session, context) {
+            (Some(session), Some(context)) => {
+                build_extension_workspace_candidate(state, project_candidate, session, context)
+                    .await
+            }
+            (None, None) => Ok(None),
+            _ => Err(anyhow!(
+                "Workspace session/context ownership is inconsistent during project switch"
+            )),
+        };
+        match workspace_candidate {
+            Ok(candidate) => prepared_extension.workspace_candidate = candidate,
+            Err(error) => {
+                return recover_failed_project_switch(
+                    state,
+                    &previous_ui_root,
+                    previous_store_root.as_deref(),
+                    previous_session,
+                    prepared_extension.project_candidate.as_ref(),
+                    prepared_extension.workspace_candidate.as_ref(),
+                    "project_switch_extension_workspace_failed",
+                    format!(
+                        "Target extension Workspace activation failed after workspace sync: {error:#}"
+                    ),
+                )
+                .await;
+            }
+        }
+    }
 
     let next_watcher = start_watcher(&root)
         .map_err(|error| anyhow!("starting target project watcher failed: {error:#}"));
@@ -5747,12 +7072,24 @@ where
                 &previous_ui_root,
                 previous_store_root.as_deref(),
                 previous_session,
+                prepared_extension.project_candidate.as_ref(),
+                prepared_extension.workspace_candidate.as_ref(),
                 "project_switch_watcher_failed",
                 format!("Target project watcher failed after workspace sync: {error:#}"),
             )
             .await;
         }
     };
+
+    if previous_normalized_root != normalized_root {
+        teardown_workspace_plugins_for_boundary(
+            state,
+            &previous_normalized_root,
+            "project_teardown",
+            "project_switched",
+        )
+        .await;
+    }
 
     if let Err(error) = set_store_active_project_root(
         state,
@@ -5764,6 +7101,8 @@ where
             &previous_ui_root,
             previous_store_root.as_deref(),
             previous_session,
+            prepared_extension.project_candidate.as_ref(),
+            prepared_extension.workspace_candidate.as_ref(),
             "project_switch_store_root_failed",
             format!("Project identity could not be committed: {error:#}"),
         )
@@ -5778,6 +7117,8 @@ where
             &previous_ui_root,
             previous_store_root.as_deref(),
             previous_session,
+            prepared_extension.project_candidate.as_ref(),
+            prepared_extension.workspace_candidate.as_ref(),
             "project_switch_last_opened_failed",
             format!("Last opened project could not be committed: {error:#}"),
         )
@@ -5791,6 +7132,62 @@ where
     if let Some(previous) = previous_watcher {
         previous.stop();
     }
+
+    match (
+        prepared_extension.project_candidate,
+        prepared_extension.workspace_candidate,
+    ) {
+        (Some(project_candidate), Some(workspace_candidate)) => {
+            if let Err(error) = state
+                .extension_host
+                .publish_project_tree_candidates(
+                    prepared_extension.expected_project,
+                    project_candidate,
+                    prepared_extension.expected_workspace,
+                    workspace_candidate,
+                )
+                .await
+            {
+                write_startup_event(json!({
+                    "kind": "internal_extension_tree_publish_rejected",
+                    "reason_code": error.reason,
+                    "rejected_project_scope_id": error.rejected_project.id,
+                    "rejected_workspace_scope_id": error.rejected_workspace.id,
+                    "actual_project_scope_id": error.actual_project.as_ref().map(|identity| &identity.id),
+                    "actual_workspace_scope_id": error.actual_workspace.as_ref().map(|identity| &identity.id),
+                }));
+            }
+        }
+        (Some(project_candidate), None) => {
+            if let Err(error) = state
+                .extension_host
+                .publish_project_candidate(prepared_extension.expected_project, project_candidate)
+                .await
+            {
+                write_startup_event(json!({
+                    "kind": "internal_extension_candidate_publish_rejected",
+                    "reason_code": error.reason,
+                    "rejected_scope_id": error.rejected.id,
+                    "rejected_generation": error.rejected.generation,
+                    "actual_scope_id": error.actual.as_ref().map(|identity| &identity.id),
+                    "actual_generation": error.actual.as_ref().map(|identity| identity.generation),
+                }));
+            }
+        }
+        (None, None) => {}
+        (None, Some(workspace_candidate)) => {
+            let report = state
+                .extension_host
+                .rollback_candidate(&workspace_candidate)
+                .await;
+            write_startup_event(json!({
+                "kind": "internal_extension_orphan_workspace_rollback",
+                "outcome": report.outcome,
+            }));
+        }
+    }
+
+    reconcile_workspace_plugins_for_boundary(state, &normalized_root, "project_switch").await;
 
     write_project_switch_event(
         "project_switch_succeeded",
@@ -5808,9 +7205,18 @@ async fn recover_failed_project_switch(
     previous_ui_root: &Path,
     previous_store_root: Option<&str>,
     previous_session: ProjectSessionSnapshot,
+    extension_project_candidate: Option<&Arc<ScopeSnapshot>>,
+    extension_workspace_candidate: Option<&Arc<ScopeSnapshot>>,
     reason_code: &str,
     message: String,
 ) -> Result<ProjectRestoreResponse> {
+    rollback_extension_project_candidates(
+        state,
+        extension_project_candidate,
+        extension_workspace_candidate,
+        reason_code,
+    )
+    .await;
     let restore_result = async {
         sync_workspace_project_root(state, previous_ui_root, SwitchTestStep::RestoreWorkspace)
             .await?;
@@ -5826,6 +7232,14 @@ async fn recover_failed_project_switch(
     match restore_result {
         Ok(()) => {
             let restored_root = previous_ui_root.to_string_lossy().replace('\\', "/");
+            let normalized_restored_root =
+                normalize_project_root(previous_ui_root.to_string_lossy().as_ref());
+            reconcile_workspace_plugins_for_boundary(
+                state,
+                &normalized_restored_root,
+                "project_switch_restored",
+            )
+            .await;
             write_project_switch_event(
                 "project_switch_failed_restored",
                 previous_ui_root,
@@ -6387,6 +7801,18 @@ fn ark_candidate_paths(
             current_exe.parent().unwrap_or(current_exe).join("ark"),
             manifest_dir.join("binaries/ark-aarch64-apple-darwin"),
         ],
+        ("linux", "x86_64") => vec![
+            resource_dir.join("resources/runtime/ark"),
+            current_exe.parent().unwrap_or(current_exe).join("ark"),
+            manifest_dir.join("../resources/runtime/ark"),
+            manifest_dir.join("binaries/ark-x86_64-unknown-linux-gnu"),
+        ],
+        ("linux", "aarch64") => vec![
+            resource_dir.join("resources/runtime/ark"),
+            current_exe.parent().unwrap_or(current_exe).join("ark"),
+            manifest_dir.join("../resources/runtime/ark"),
+            manifest_dir.join("binaries/ark-aarch64-unknown-linux-gnu"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -6441,6 +7867,18 @@ fn locate_rscript(selected: Option<&Path>) -> Result<PathBuf> {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    for candidate in [
+        PathBuf::from("/usr/lib/R/bin/Rscript"),
+        PathBuf::from("/usr/local/lib/R/bin/Rscript"),
+        PathBuf::from("/opt/conda/bin/Rscript"),
+        PathBuf::from("/opt/miniconda3/bin/Rscript"),
+    ] {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
     let search_path =
         platform::child_process_path(None).context("constructing the Rscript search PATH")?;
     let executable = if cfg!(windows) {
@@ -6473,7 +7911,11 @@ fn locate_rscript(selected: Option<&Path>) -> Result<PathBuf> {
     bail!("Rscript.exe was not found. Install R 4.4 or later, then restart Rho.");
     #[cfg(target_os = "macos")]
     bail!("Rscript was not found. Install arm64 R 4.4 or later, then restart Rho.");
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    bail!(
+        "Rscript was not found. Install R 4.4 or later (for example `sudo apt install r-base` on Debian/Ubuntu), then restart Rho."
+    );
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     bail!("Rscript was not found. Install R 4.4 or later, then restart Rho.")
 }
 
@@ -6849,7 +8291,7 @@ async fn clear_agent_history(state: State<'_, AppState>) -> Result<Value, String
         return Err("Wait for Agent file operations before clearing history.".to_string());
     }
     let mut store = read_store(&state).map_err(display_error)?;
-    let deleted = store
+    let deleted = ProjectMutationService::new(&mut store)
         .clear_agent_history(&project_root)
         .map_err(display_error)?;
     drop(tasks);
@@ -6886,6 +8328,8 @@ fn ensure_supported_r_version(version: &str) -> Result<()> {
 fn r_architecture_supported(target_os: &str, target_arch: &str, r_arch: &str) -> bool {
     if target_os == "macos" && target_arch == "aarch64" {
         matches!(r_arch.trim(), "aarch64" | "arm64")
+    } else if target_os == "linux" && target_arch == "x86_64" {
+        matches!(r_arch.trim(), "x86_64")
     } else {
         true
     }
@@ -6894,7 +8338,8 @@ fn r_architecture_supported(target_os: &str, target_arch: &str, r_arch: &str) ->
 fn ensure_supported_r_architecture(r_arch: &str) -> Result<()> {
     ensure!(
         r_architecture_supported(std::env::consts::OS, std::env::consts::ARCH, r_arch),
-        "R_ARCH_MISMATCH: Rho for Apple Silicon requires arm64 R; found `{}`",
+        "R_ARCH_MISMATCH: {}; found `{}`",
+        platform::r_architecture_requirement(),
         r_arch.trim()
     );
     Ok(())
@@ -7071,6 +8516,53 @@ fn write_startup_event(event: Value) {
     }
 }
 
+async fn build_extension_host(
+    mode_value: Option<&str>,
+    diagnostics: Arc<dyn DiagnosticSink>,
+) -> Result<Arc<ExtensionHost>> {
+    let mode = InternalExtensionRuntimeMode::parse(mode_value, diagnostics.as_ref());
+    let host_capabilities = vec![
+        CapabilityDeclaration::new(runs_broker_capability_id(), 1),
+        CapabilityDeclaration::new(workspace_probe_broker_capability_id(), 1),
+    ];
+    let host = if mode == InternalExtensionRuntimeMode::Legacy {
+        ExtensionHost::new_with_host_capabilities(
+            mode,
+            host_capabilities,
+            diagnostics,
+            LifecycleDeadlines::default(),
+        )
+        .context("creating legacy internal extension host")?
+    } else {
+        ExtensionHost::new_with_application_plugins(
+            mode,
+            host_capabilities,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::application_kind()),
+            Arc::new(rho_extension_runtime::RejectingBrokerFacade),
+            diagnostics,
+            LifecycleDeadlines::default(),
+        )
+        .await
+        .context("creating candidate internal extension host")?
+    };
+    Ok(Arc::new(host))
+}
+
+async fn desktop_extension_host() -> Result<Arc<ExtensionHost>> {
+    let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(|diagnostic: ExtensionDiagnostic| {
+        write_startup_event(json!({
+            "kind": "internal_extension_runtime",
+            "diagnostic": diagnostic,
+        }));
+    });
+    let mode = match std::env::var("RHO_INTERNAL_EXTENSION_RUNTIME") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => Some("invalid_non_unicode".to_string()),
+    };
+    build_extension_host(mode.as_deref(), diagnostics).await
+}
+
 fn selected_rscript_path(data_dir: &Path) -> PathBuf {
     data_dir.join("runtime").join("selected-rscript.txt")
 }
@@ -7153,7 +8645,7 @@ fn classify_startup_error(detail: &str) -> StartupIssue {
                 "R_ARCH_MISMATCH",
                 "probing_base_r",
                 "This R architecture is not supported",
-                "Rho for Apple Silicon requires an arm64 R 4.4 or later installation.".to_string(),
+                platform::r_architecture_requirement_message().to_string(),
                 startup_recovery_actions(),
             )
         } else if detail.contains("Rscript was not found")
@@ -7235,27 +8727,30 @@ mod tests {
     use super::{
         AgentFileApplyRequest, AgentFileApplyTestControl, AgentFileMutationRegistry,
         AgentFileUndoRequest, AgentModelTestControl, AgentRuntimeStatus, AgentTaskEntry, AppState,
-        ExecuteRequest, ExecuteSourceRange, MINIMUM_AGENT_AISDK_VERSION, ProbeProcessOutput,
-        RUNTIME_CACHE_VERSION, RUserStartupFiles, RenderJobState, RuntimeCacheFile, RuntimeConfig,
-        StartupView, SwitchTestControl, SwitchTestStep, active_context,
-        agent_file_postwrite_failure, agent_file_write_failure, agent_retry_source,
-        agent_runtime_probe_expression, agent_runtime_status_from_probe,
+        ExecuteRequest, ExecuteSourceRange, MINIMUM_AGENT_AISDK_VERSION,
+        PersistedAgentFileProposal, ProbeProcessOutput, RUNTIME_CACHE_VERSION, RUserStartupFiles,
+        RenderJobState, RuntimeCacheFile, RuntimeConfig, StartupView, SwitchTestControl,
+        SwitchTestStep, active_context, agent_file_postwrite_failure, agent_file_write_failure,
+        agent_retry_source, agent_runtime_probe_expression, agent_runtime_status_from_probe,
         agent_turn_admission_error, append_agent_file_mutation_event, apply_agent_file_edit_state,
         ark_candidate_paths, attach_render_artifact, bounded_diagnostic, cancel_agent_turn_state,
-        classify_startup_error, configure_user_startup, contain_audit_panic,
-        data_view_artifact_metadata, data_view_delimited_text, decode_plot_png_base64,
-        deferred_agent_runtime_status, delete_agent_conversation_state, durable_project_root,
-        editor_format_result, ensure_artifact_export_target, ensure_bundled_license_file,
-        ensure_supported_r_architecture, ensure_supported_r_version, existing_startup_file,
-        find_executable_on_path, finish_render_job, has_png_signature, interrupt_all_agent_tasks,
-        load_runtime_cache, locate_ark_from_candidates, locate_rscript,
-        lockfile_inventory_arguments, parse_r_runtime_probe, project_switch_blocker,
-        r_architecture_supported, reconcile_render_job, recover_incomplete_agent_file_mutations,
-        render_job_is_terminal, retry_run_arguments, run_is_retryable, runtime_file_signature,
-        safe_delete_project_file, save_runtime_cache, source_claim_snapshot,
-        switch_project_with_watcher_factory, text_sha256, undo_agent_file_edit_state,
-        validate_execute_source_range_shape, workspace_project_root_code, write_r_probe_script,
+        classify_startup_error, configure_user_startup, data_view_artifact_metadata,
+        data_view_delimited_text, decode_plot_png_base64, deferred_agent_runtime_status,
+        delete_agent_conversation_state, durable_project_root, editor_format_result,
+        ensure_agent_file_proposal_turn_terminal, ensure_artifact_export_target,
+        ensure_bundled_license_file, ensure_supported_r_architecture, ensure_supported_r_version,
+        existing_startup_file, find_executable_on_path, finish_render_job, has_png_signature,
+        interrupt_all_agent_tasks, load_runtime_cache, locate_ark_from_candidates, locate_rscript,
+        lockfile_inventory_arguments, parse_r_runtime_probe, pending_native_update_matches,
+        project_switch_blocker, r_architecture_supported, reconcile_render_job,
+        recover_incomplete_agent_file_mutations, render_job_is_terminal, retry_run_arguments,
+        run_is_retryable, runtime_file_signature, safe_delete_project_file, save_runtime_cache,
+        shutdown_application, source_claim_snapshot, switch_project_with_watcher_factory,
+        text_sha256, undo_agent_file_edit_state, validate_execute_source_range_shape,
+        validate_persisted_agent_file_proposal_structure, workspace_project_root_code,
+        write_r_probe_script,
     };
+    use crate::commands::runs::{contain_audit_panic, list_runs_with_state};
     use crate::platform;
 
     use crate::project::{
@@ -7263,23 +8758,154 @@ mod tests {
         ProjectWatcherControl,
     };
     use rho_core::BrokerState;
+    use rho_extension_runtime::{
+        ActivationError, BoundedJson, BrokerError, BrokerFacade, DiagnosticSink,
+        ExtensionDiagnostic, ExtensionHost, InternalExtensionRuntimeMode, InternalPlugin,
+        LifecycleDeadlines, PluginContext, ScopeLifecycleState, SourceHandler,
+    };
     use rho_server::coordinator::{
         AgentWorkspaceLane, ApprovalResponseInput, CoordinatorRuntime, PendingApprovalRegistry,
     };
     use rho_store::{
         AgentConversationDraft, AgentTurnDraft, AgentTurnEventDraft, AgentTurnFinish,
         ApprovalRequestDraft, ArtifactRecordSummary, EnvironmentOperationRequestDraft,
-        PlotArtifactDraft, RunDraft, Store, normalize_project_root,
+        PlotArtifactDraft, RunDraft, RunFinish, Store, normalize_project_root,
     };
     use serde_json::json;
     use std::collections::HashMap;
+    use std::future::Future;
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
     use std::process::Command;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
     use tempfile::TempDir;
-    use tokio::sync::{Mutex, RwLock, oneshot};
+    use tokio::sync::{Mutex, RwLock, Semaphore, oneshot};
+
+    struct DelayedRunHistoryHandler {
+        started: Arc<Semaphore>,
+        release: Arc<Semaphore>,
+        response: serde_json::Value,
+    }
+
+    impl SourceHandler for DelayedRunHistoryHandler {
+        fn call<'a>(
+            &'a self,
+            _request: BoundedJson,
+        ) -> Pin<Box<dyn Future<Output = Result<BoundedJson, BrokerError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.started.add_permits(1);
+                self.release
+                    .acquire()
+                    .await
+                    .expect("test release semaphore must remain open")
+                    .forget();
+                BoundedJson::generic(self.response.clone()).map_err(BrokerError::from)
+            })
+        }
+    }
+
+    struct DelayedRunHistoryPlugin {
+        descriptor: rho_extension_runtime::PluginDescriptor,
+        started: Arc<Semaphore>,
+        release: Arc<Semaphore>,
+        response: serde_json::Value,
+    }
+
+    impl DelayedRunHistoryPlugin {
+        fn new(
+            started: Arc<Semaphore>,
+            release: Arc<Semaphore>,
+            response: serde_json::Value,
+        ) -> Self {
+            let mut descriptor = rho_extension_runtime::PluginDescriptor::new(
+                rho_extension_runtime::PluginId::new("org.yulab.rho.run-history-delayed-test")
+                    .unwrap(),
+                rho_extension_runtime::PluginVersion::parse("1.0.0").unwrap(),
+                vec![rho_extension_runtime::ScopePolicy::project_kind()],
+            );
+            descriptor.provides = vec![rho_extension_runtime::CapabilityDeclaration::new(
+                super::run_history_source_capability_id(),
+                1,
+            )];
+            descriptor.requires = vec![rho_extension_runtime::CapabilityRequirement::new(
+                super::runs_broker_capability_id(),
+                1,
+            )];
+            Self {
+                descriptor,
+                started,
+                release,
+                response,
+            }
+        }
+    }
+
+    impl InternalPlugin for DelayedRunHistoryPlugin {
+        fn descriptor(&self) -> &rho_extension_runtime::PluginDescriptor {
+            &self.descriptor
+        }
+
+        fn activate<'a>(
+            &'a self,
+            context: PluginContext<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ActivationError>> + Send + 'a>> {
+            Box::pin(async move {
+                context
+                    .effects
+                    .register_source(
+                        context.registry,
+                        super::run_history_source_capability_id(),
+                        Arc::new(DelayedRunHistoryHandler {
+                            started: Arc::clone(&self.started),
+                            release: Arc::clone(&self.release),
+                            response: self.response.clone(),
+                        }),
+                    )
+                    .map_err(|error| {
+                        ActivationError::new("delayed_run_history_registration", error.to_string())
+                    })?;
+                Ok(())
+            })
+        }
+    }
+
+    struct RecordingWorkspaceBroker {
+        response: serde_json::Value,
+        failure: Option<(&'static str, &'static str)>,
+        requests: Arc<StdMutex<Vec<serde_json::Value>>>,
+    }
+
+    impl BrokerFacade for RecordingWorkspaceBroker {
+        fn call<'a>(
+            &'a self,
+            request: rho_extension_runtime::BrokerRequest,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            rho_extension_runtime::BrokerResponse,
+                            rho_extension_runtime::BrokerError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(request.payload.value().clone());
+            let result = match self.failure {
+                Some((code, message)) => {
+                    Err(rho_extension_runtime::BrokerError::rejected(code, message))
+                }
+                None => rho_extension_runtime::BrokerResponse::new(self.response.clone(), &request)
+                    .map_err(rho_extension_runtime::BrokerError::from),
+            };
+            Box::pin(async move { result })
+        }
+    }
 
     fn execute_request(code: &str, source_range: Option<ExecuteSourceRange>) -> ExecuteRequest {
         ExecuteRequest {
@@ -7315,6 +8941,28 @@ mod tests {
         );
         assert!(validate_execute_source_range_shape(&single_line).is_ok());
         assert!(validate_execute_source_range_shape(&execute_request("summary(qc)", None)).is_ok());
+    }
+
+    #[test]
+    fn native_updater_install_requires_the_exact_checked_semver() {
+        assert!(pending_native_update_matches(
+            "0.4.0-dev.40",
+            "0.4.0-dev.40"
+        ));
+        assert!(!pending_native_update_matches(
+            "0.4.0-dev.40",
+            "0.4.0-dev.41"
+        ));
+        assert!(!pending_native_update_matches("not-semver", "0.4.0-dev.40"));
+        assert!(!pending_native_update_matches("0.4.0-dev.40", "not-semver"));
+        assert!(!pending_native_update_matches(
+            &"0".repeat(129),
+            "0.4.0-dev.40"
+        ));
+        assert!(!pending_native_update_matches(
+            "0.4.0-dev.40",
+            &"0".repeat(129)
+        ));
     }
 
     #[test]
@@ -7429,7 +9077,9 @@ mod tests {
         let ark = directory.path().join("ark.exe");
         assert!(load_runtime_cache(directory.path(), &rscript, &ark).is_some());
 
-        std::fs::write(&rscript, b"changed").unwrap();
+        // Use a different payload size so this is deterministic even when the filesystem
+        // reports both writes in the same millisecond.
+        std::fs::write(&rscript, b"changed-size").unwrap();
         assert!(load_runtime_cache(directory.path(), &rscript, &ark).is_none());
     }
 
@@ -7796,6 +9446,75 @@ mod tests {
     }
 
     fn test_app_state(data_dir: &Path, project_root: &Path, store_path: &Path) -> AppState {
+        test_app_state_with_extension_mode(
+            data_dir,
+            project_root,
+            store_path,
+            InternalExtensionRuntimeMode::Legacy,
+        )
+    }
+
+    fn test_app_state_with_extension_mode(
+        data_dir: &Path,
+        project_root: &Path,
+        store_path: &Path,
+        mode: InternalExtensionRuntimeMode,
+    ) -> AppState {
+        let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(|_: ExtensionDiagnostic| {});
+        let extension_host = Arc::new(
+            ExtensionHost::new_with_host_capabilities(
+                mode,
+                vec![
+                    rho_extension_runtime::CapabilityDeclaration::new(
+                        super::runs_broker_capability_id(),
+                        1,
+                    ),
+                    rho_extension_runtime::CapabilityDeclaration::new(
+                        super::workspace_probe_broker_capability_id(),
+                        1,
+                    ),
+                ],
+                diagnostics,
+                LifecycleDeadlines::default(),
+            )
+            .unwrap(),
+        );
+        test_app_state_with_extension_host(data_dir, project_root, store_path, extension_host)
+    }
+
+    async fn test_candidate_extension_host_with_application_plugins() -> Arc<ExtensionHost> {
+        let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(|_: ExtensionDiagnostic| {});
+        Arc::new(
+            ExtensionHost::new_with_application_plugins(
+                InternalExtensionRuntimeMode::Candidate,
+                vec![
+                    rho_extension_runtime::CapabilityDeclaration::new(
+                        super::runs_broker_capability_id(),
+                        1,
+                    ),
+                    rho_extension_runtime::CapabilityDeclaration::new(
+                        super::workspace_probe_broker_capability_id(),
+                        1,
+                    ),
+                ],
+                super::internal_plugins_for_scope(
+                    &rho_extension_runtime::ScopePolicy::application_kind(),
+                ),
+                Arc::new(rho_extension_runtime::RejectingBrokerFacade),
+                diagnostics,
+                LifecycleDeadlines::default(),
+            )
+            .await
+            .unwrap(),
+        )
+    }
+
+    fn test_app_state_with_extension_host(
+        data_dir: &Path,
+        project_root: &Path,
+        store_path: &Path,
+        extension_host: Arc<ExtensionHost>,
+    ) -> AppState {
         AppState {
             data_dir: data_dir.to_path_buf(),
             ark: data_dir.join("ark.exe"),
@@ -7815,6 +9534,8 @@ mod tests {
             approvals: Arc::new(PendingApprovalRegistry::default()),
             environment_approvals: Arc::new(PendingApprovalRegistry::default()),
             project_transition_gate: Arc::new(Mutex::new(())),
+            extension_host,
+            plugin_permissions: crate::workspace_plugins::PendingPluginPermissionRegistry::new(),
             agent_tasks: Arc::new(Mutex::new(HashMap::new())),
             agent_workspace_lane: Arc::new(AgentWorkspaceLane::default()),
             agent_file_mutations: Arc::new(AgentFileMutationRegistry::default()),
@@ -7825,6 +9546,29 @@ mod tests {
             render_jobs: Arc::new(Mutex::new(HashMap::new())),
             render_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    fn create_run_fixture(store: &mut Store, project_root: &str, run_id: &str, code: &str) {
+        store
+            .create_run(&RunDraft {
+                run_id: run_id.to_string(),
+                parent_run_id: None,
+                project_root: project_root.to_string(),
+                origin: "user".to_string(),
+                request_type: "workspace.execute".to_string(),
+                operation_class: "state_capable".to_string(),
+                code: code.to_string(),
+                arguments_json: "{}".to_string(),
+                source_path: Some("analysis.R".to_string()),
+                execution_mode: Some("console".to_string()),
+                document_version: Some(1),
+                workspace_id: format!("ws-{run_id}"),
+                state_revision_before: 1,
+                project_revision_before: 1,
+                environment_snapshot_id: None,
+            })
+            .unwrap();
+        store.update_run_status(run_id, "completed", None).unwrap();
     }
 
     fn add_agent_file_proposal(
@@ -7950,6 +9694,99 @@ mod tests {
             Some(Arc::new(Mutex::new(CoordinatorRuntime { broker, store })));
     }
 
+    #[test]
+    fn file_proposal_structure_rejects_empty_selection_and_invalid_cursor_range() {
+        let empty_selection = PersistedAgentFileProposal {
+            path: "scatter_plot_example.R".to_string(),
+            operation: "replace_selection".to_string(),
+            content: "replacement".to_string(),
+            editor_context: Some(json!({
+                "active_path": "scatter_plot_example.R",
+                "selection_start": 527,
+                "selection_end": 527,
+                "selection_text": ""
+            })),
+        };
+        let error = validate_persisted_agent_file_proposal_structure(&empty_selection).unwrap_err();
+        assert!(error.to_string().contains("AGENT_FILE_PROPOSAL_INVALID"));
+        assert!(error.to_string().contains("non-empty text"));
+
+        let invalid_cursor = PersistedAgentFileProposal {
+            operation: "insert_at_cursor".to_string(),
+            editor_context: Some(json!({
+                "active_path": "scatter_plot_example.R",
+                "selection_start": 10,
+                "selection_end": 12,
+                "selection_text": "ab"
+            })),
+            ..empty_selection.clone()
+        };
+        assert!(
+            validate_persisted_agent_file_proposal_structure(&invalid_cursor)
+                .unwrap_err()
+                .to_string()
+                .contains("empty captured range")
+        );
+
+        let valid = PersistedAgentFileProposal {
+            editor_context: Some(json!({
+                "active_path": "scatter_plot_example.R",
+                "selection_start": 10,
+                "selection_end": 12,
+                "selection_text": "ab"
+            })),
+            ..empty_selection
+        };
+        validate_persisted_agent_file_proposal_structure(&valid).unwrap();
+    }
+
+    #[test]
+    fn file_proposal_turn_must_be_terminal_before_mutation_admission() {
+        let directory = TempDir::new().unwrap();
+        let mut store = Store::open(directory.path().join("rho.sqlite")).unwrap();
+        let project_root = "D:/Rho/project";
+        store
+            .create_agent_turn_with_conversation(
+                &AgentConversationDraft {
+                    conversation_id: "conversation-running-proposal".to_string(),
+                    project_root: project_root.to_string(),
+                    title: "Running proposal".to_string(),
+                    legacy_unthreaded: false,
+                },
+                &AgentTurnDraft {
+                    turn_id: "turn-running-proposal".to_string(),
+                    project_root: project_root.to_string(),
+                    mode: "act".to_string(),
+                    prompt: "Edit the file".to_string(),
+                    model: "test-model".to_string(),
+                    workspace_id: "ws-file-test".to_string(),
+                    state_revision_before: 0,
+                    project_revision_before: 0,
+                },
+            )
+            .unwrap();
+
+        let error =
+            ensure_agent_file_proposal_turn_terminal(&store, project_root, "turn-running-proposal")
+                .unwrap_err();
+        assert!(error.to_string().contains("AGENT_FILE_TURN_ACTIVE"));
+
+        store
+            .finish_agent_turn(&AgentTurnFinish {
+                turn_id: "turn-running-proposal".to_string(),
+                status: "completed".to_string(),
+                terminal_reason: Some("completed".to_string()),
+                workspace_id_after: Some("ws-file-test".to_string()),
+                state_revision_after: Some(0),
+                project_revision_after: Some(0),
+                final_message: Some("Proposal ready".to_string()),
+                error_message: None,
+            })
+            .unwrap();
+        ensure_agent_file_proposal_turn_terminal(&store, project_root, "turn-running-proposal")
+            .unwrap();
+    }
+
     fn create_waiting_approval(
         store: &mut Store,
         project_root: &str,
@@ -7982,6 +9819,16 @@ mod tests {
                 project_revision: 1,
             })
             .unwrap();
+    }
+
+    fn assert_run_summaries_equal(
+        actual: Vec<rho_store::RunSummary>,
+        expected: &[rho_store::RunSummary],
+    ) {
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
     }
 
     fn save_session_fixture(
@@ -8234,7 +10081,6 @@ mod tests {
                 .lane(&format!("{normalized_root}\0analysis.R"))
                 .await;
             let lane_guard = lane.lock().await;
-            let transition_guard = state.project_transition_gate.lock().await;
 
             let apply_state = state.clone();
             let (apply_started_tx, apply_started_rx) = oneshot::channel();
@@ -8253,6 +10099,23 @@ mod tests {
                 .await
             });
             apply_started_rx.await.unwrap();
+            // Do not infer Tokio lock acquisition order from spawn order. The
+            // product invariant starts only after Apply has registered its
+            // queued claim while waiting for the per-file lane.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if state
+                        .agent_file_mutations
+                        .blocker(&normalized_root)
+                        .is_some()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("Agent file mutation claim was not registered before project switch preflight");
 
             let switch_state = state.clone();
             let (switch_started_tx, switch_started_rx) = oneshot::channel();
@@ -8264,9 +10127,8 @@ mod tests {
                 .await
             });
             switch_started_rx.await.unwrap();
-            drop(transition_guard);
 
-            let response = tokio::time::timeout(Duration::from_secs(2), switch)
+            let response = tokio::time::timeout(Duration::from_secs(5), switch)
                 .await
                 .expect("project switch did not reach its preflight")
                 .unwrap()
@@ -9847,6 +11709,1132 @@ mod tests {
                 .to_string_lossy()
                 .replace('\\', "/");
             assert_eq!(last_opened, project_b.to_string_lossy().replace('\\', "/"));
+            assert!(state.extension_host.scopes().project().is_none());
+            assert_eq!(
+                state.extension_host.scopes().application().state(),
+                ScopeLifecycleState::Active
+            );
+        });
+    }
+
+    #[test]
+    fn candidate_project_scope_tracks_a_b_a_with_fresh_generations() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a).unwrap();
+            std::fs::create_dir_all(&project_b).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            Store::open(&store_path)
+                .unwrap()
+                .set_project_root(Some(&root_a))
+                .unwrap();
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+
+            for target in [&project_a, &project_b, &project_a] {
+                state
+                    .switch_test_control
+                    .succeed_without_running(SwitchTestStep::SyncWorkspace);
+                let response =
+                    switch_project_with_watcher_factory(target.to_path_buf(), None, &state, |_| {
+                        Ok(ProjectWatcherControl::noop())
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(response.status, "ready");
+            }
+
+            let final_scope = state.extension_host.scopes().project().unwrap();
+            assert_eq!(final_scope.state(), ScopeLifecycleState::Active);
+            let expected_id = format!("project.{}", text_sha256(&root_a));
+            assert_eq!(final_scope.identity().id.as_str(), expected_id);
+            assert_eq!(final_scope.identity().generation.get(), 4);
+        });
+    }
+
+    #[test]
+    fn run_history_plugin_descriptor_is_fixed_and_permission_free() {
+        let plugin = super::RunHistoryPlugin::new();
+        let descriptor = plugin.descriptor();
+        assert_eq!(descriptor.id.as_str(), "org.yulab.rho.run-history");
+        assert_eq!(
+            descriptor.allowed_scopes,
+            vec![rho_extension_runtime::ScopePolicy::project_kind()]
+        );
+        assert_eq!(descriptor.provides.len(), 1);
+        assert_eq!(
+            descriptor.provides[0].capability_id.as_str(),
+            "source.project.run-history"
+        );
+        assert_eq!(descriptor.provides[0].contract_major.get(), 1);
+        assert_eq!(descriptor.requires.len(), 1);
+        assert_eq!(
+            descriptor.requires[0].capability_id.as_str(),
+            "service.broker.runs"
+        );
+        assert_eq!(descriptor.requires[0].contract_major.get(), 1);
+        let json = serde_json::to_value(descriptor).unwrap();
+        assert!(json.get("permissions").is_none());
+    }
+
+    #[test]
+    fn workspace_snapshot_plugin_descriptor_is_fixed_typed_and_permission_free() {
+        let plugin = super::WorkspaceSnapshotPlugin::new();
+        let descriptor = plugin.descriptor();
+        assert_eq!(
+            descriptor.id.as_str(),
+            "org.yulab.rho.workspace-snapshot-tool"
+        );
+        assert_eq!(
+            descriptor.allowed_scopes,
+            vec![rho_extension_runtime::ScopePolicy::workspace_kind()]
+        );
+        assert_eq!(
+            descriptor.provides[0].capability_id.as_str(),
+            "tool.workspace.snapshot"
+        );
+        assert_eq!(descriptor.provides[0].contract_major.get(), 1);
+        assert_eq!(
+            descriptor.requires[0].capability_id.as_str(),
+            "service.broker.workspace-probe"
+        );
+        assert_eq!(descriptor.requires[0].contract_major.get(), 1);
+        assert!(
+            serde_json::to_value(descriptor)
+                .unwrap()
+                .get("permissions")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn project_file_viewer_plugin_is_application_scoped_and_path_free() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let plugin = super::ProjectFileViewerPlugin::new();
+            let descriptor = plugin.descriptor();
+            assert_eq!(descriptor.id.as_str(), "org.yulab.rho.project-file-viewer");
+            assert_eq!(
+                descriptor.allowed_scopes,
+                vec![rho_extension_runtime::ScopePolicy::application_kind()]
+            );
+            assert_eq!(
+                descriptor.provides[0].capability_id.as_str(),
+                "ui.viewer.project-file"
+            );
+
+            let host = test_candidate_extension_host_with_application_plugins().await;
+            let application = host.scopes().application();
+            let resolution = application
+                .registry()
+                .resolve_project_file_viewer(&super::project_file_viewer_capability_id())
+                .unwrap();
+            let value = serde_json::to_value(resolution.contribution()).unwrap();
+            assert!(value.get("project_root").is_none());
+            assert!(value.get("path").is_none());
+            assert!(value.get("handler").is_none());
+            assert_eq!(
+                resolution.contribution().general_maximum_bytes(),
+                super::MAX_VIEWER_FILE_BYTES as usize
+            );
+            assert_eq!(
+                resolution.contribution().html_maximum_bytes(),
+                super::MAX_VIEWER_HTML_BYTES as usize
+            );
+        });
+    }
+
+    #[test]
+    fn extension_host_activates_application_plugins_only_in_candidate_mode() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let diagnostics =
+                || -> Arc<dyn DiagnosticSink> { Arc::new(|_: ExtensionDiagnostic| {}) };
+            let legacy = super::build_extension_host(Some("legacy"), diagnostics())
+                .await
+                .unwrap();
+            assert!(
+                legacy
+                    .scopes()
+                    .application()
+                    .registry()
+                    .resolve_project_file_viewer(&super::project_file_viewer_capability_id())
+                    .is_err()
+            );
+            let candidate = super::build_extension_host(Some("candidate"), diagnostics())
+                .await
+                .unwrap();
+            assert!(
+                candidate
+                    .scopes()
+                    .application()
+                    .registry()
+                    .resolve_project_file_viewer(&super::project_file_viewer_capability_id())
+                    .is_ok()
+            );
+            let default = super::build_extension_host(None, diagnostics())
+                .await
+                .unwrap();
+            assert_eq!(
+                default.mode(),
+                rho_extension_runtime::InternalExtensionRuntimeMode::Candidate
+            );
+            assert!(
+                default
+                    .scopes()
+                    .application()
+                    .registry()
+                    .resolve_project_file_viewer(&super::project_file_viewer_capability_id())
+                    .is_ok()
+            );
+        });
+    }
+
+    #[test]
+    fn candidate_workspace_snapshot_preserves_typed_system_and_agent_requests() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let normalized_root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            let store_path = tempdir.path().join("rho.sqlite");
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&normalized_root)).unwrap();
+            let broker = BrokerState::new("workspace-test");
+            let identity = broker.identity().clone();
+            let context = Arc::new(Mutex::new(CoordinatorRuntime { broker, store }));
+
+            let host = test_candidate_extension_host_with_application_plugins().await;
+            let project = host
+                .build_project_candidate(
+                    super::extension_project_scope_id(&normalized_root).unwrap(),
+                    super::internal_plugins_for_scope(
+                        &rho_extension_runtime::ScopePolicy::project_kind(),
+                    ),
+                    Arc::new(super::RunHistoryBrokerFacade {
+                        store_path: store_path.clone(),
+                        project_root: normalized_root.clone(),
+                    }),
+                )
+                .await
+                .unwrap();
+            host.publish_project_candidate(None, project.clone())
+                .await
+                .unwrap();
+            let response = json!({
+                "execution_id": "snapshot-fixture",
+                "execution": {"ok": true, "objects": []},
+                "workspace": identity,
+            });
+            let requests = Arc::new(StdMutex::new(Vec::new()));
+            let workspace = host
+                .build_workspace_candidate(
+                    &project,
+                    super::extension_workspace_scope_id(&project, &identity).unwrap(),
+                    super::internal_plugins_for_scope(
+                        &rho_extension_runtime::ScopePolicy::workspace_kind(),
+                    ),
+                    Arc::new(RecordingWorkspaceBroker {
+                        response: response.clone(),
+                        failure: None,
+                        requests: Arc::clone(&requests),
+                    }),
+                )
+                .await
+                .unwrap();
+            host.publish_workspace_candidate(None, workspace)
+                .await
+                .unwrap();
+            let state = test_app_state_with_extension_host(
+                tempdir.path(),
+                &project_root,
+                &store_path,
+                Arc::clone(&host),
+            );
+            *state.context.lock().await = Some(Arc::clone(&context));
+
+            assert_eq!(
+                super::snapshot_workspace_with_state(&state).await.unwrap(),
+                response
+            );
+            let adapter = super::ExtensionWorkspaceSnapshotAdapter {
+                extension_host: Arc::clone(&host),
+                context: Arc::clone(&context),
+            };
+            let agent_result = rho_server::coordinator::WorkspaceSnapshotAdapter::snapshot(
+                &adapter,
+                json!({
+                    "arguments": {},
+                    "expected_workspace": super::expected_workspace(&identity),
+                }),
+                "agent_workspace_fixture".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(agent_result, response);
+
+            context.lock().await.broker.project_changed();
+            let stale_error = super::snapshot_workspace_with_state(&state)
+                .await
+                .unwrap_err();
+            assert!(stale_error.contains("stale after Workspace state changed"));
+
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            for request in requests.iter() {
+                assert_eq!(request["operation"], "snapshot");
+                assert!(request.get("code").is_none());
+                assert!(request.get("expression").is_none());
+            }
+            assert_eq!(requests[0]["origin"], "system");
+            assert!(requests[0]["execution_id"].is_null());
+            assert_eq!(requests[1]["origin"], "agent");
+            assert_eq!(requests[1]["execution_id"], "agent_workspace_fixture");
+            assert_eq!(requests[2]["origin"], "system");
+        });
+    }
+
+    #[test]
+    fn candidate_workspace_snapshot_handler_failure_does_not_retry_legacy() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let normalized_root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            let store_path = tempdir.path().join("rho.sqlite");
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&normalized_root)).unwrap();
+            let broker = BrokerState::new("workspace-failure");
+            let identity = broker.identity().clone();
+            let context = Arc::new(Mutex::new(CoordinatorRuntime { broker, store }));
+            let host = test_candidate_extension_host_with_application_plugins().await;
+            let project = host
+                .build_project_candidate(
+                    super::extension_project_scope_id(&normalized_root).unwrap(),
+                    super::internal_plugins_for_scope(
+                        &rho_extension_runtime::ScopePolicy::project_kind(),
+                    ),
+                    Arc::new(super::RunHistoryBrokerFacade {
+                        store_path: store_path.clone(),
+                        project_root: normalized_root,
+                    }),
+                )
+                .await
+                .unwrap();
+            host.publish_project_candidate(None, project.clone())
+                .await
+                .unwrap();
+            let workspace = host
+                .build_workspace_candidate(
+                    &project,
+                    super::extension_workspace_scope_id(&project, &identity).unwrap(),
+                    super::internal_plugins_for_scope(
+                        &rho_extension_runtime::ScopePolicy::workspace_kind(),
+                    ),
+                    Arc::new(RecordingWorkspaceBroker {
+                        response: json!({}),
+                        failure: Some(("ark_unavailable", "injected Ark failure")),
+                        requests: Arc::new(StdMutex::new(Vec::new())),
+                    }),
+                )
+                .await
+                .unwrap();
+            host.publish_workspace_candidate(None, workspace)
+                .await
+                .unwrap();
+            let state = test_app_state_with_extension_host(
+                tempdir.path(),
+                &project_root,
+                &store_path,
+                host,
+            );
+            *state.context.lock().await = Some(context);
+            let error = super::snapshot_workspace_with_state(&state)
+                .await
+                .unwrap_err();
+            assert!(error.contains("ark_unavailable"));
+        });
+    }
+
+    #[test]
+    fn project_file_viewer_legacy_candidate_and_two_project_results_match() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a_path = tempdir.path().join("project-a");
+            let project_b_path = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a_path).unwrap();
+            std::fs::create_dir_all(&project_b_path).unwrap();
+            let project_a = project_a_path.canonicalize().unwrap();
+            let project_b = project_b_path.canonicalize().unwrap();
+            std::fs::write(project_a.join("report.html"), "<h1>project A</h1>").unwrap();
+            std::fs::write(project_b.join("report.html"), "<h1>project B</h1>").unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            Store::open(&store_path).unwrap();
+
+            let legacy = test_app_state(tempdir.path(), &project_a, &store_path);
+            let candidate = test_app_state_with_extension_host(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                test_candidate_extension_host_with_application_plugins().await,
+            );
+            let legacy_a = super::viewer_read_file_with_state("report.html".to_string(), &legacy)
+                .await
+                .unwrap();
+            let candidate_a =
+                super::viewer_read_file_with_state("report.html".to_string(), &candidate)
+                    .await
+                    .unwrap();
+            assert_eq!(legacy_a, candidate_a);
+            assert_eq!(candidate_a.content, "<h1>project A</h1>");
+
+            *candidate.project_root.write().await = project_b.clone();
+            let candidate_b =
+                super::viewer_read_file_with_state("report.html".to_string(), &candidate)
+                    .await
+                    .unwrap();
+            assert_eq!(candidate_b.content, "<h1>project B</h1>");
+            assert_ne!(candidate_a.project_root, candidate_b.project_root);
+            assert!(
+                super::viewer_read_file_with_state(
+                    "../project-a/report.html".to_string(),
+                    &candidate
+                )
+                .await
+                .is_err()
+            );
+
+            let missing = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            let error = super::viewer_read_file_with_state("report.html".to_string(), &missing)
+                .await
+                .unwrap_err();
+            assert!(error.contains("viewer contribution is missing"));
+        });
+    }
+
+    #[test]
+    fn run_history_candidate_matches_store_across_limits_projects_and_restart() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            let project_empty = tempdir.path().join("project-empty");
+            for root in [&project_a, &project_b, &project_empty] {
+                std::fs::create_dir_all(root).unwrap();
+            }
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            let root_b = normalize_project_root(project_b.to_string_lossy().as_ref());
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&root_a)).unwrap();
+            create_run_fixture(&mut store, &root_a, "run-a-1", "a <- 1");
+            create_run_fixture(&mut store, &root_a, "run-a-2", "a <- 2");
+            create_run_fixture(&mut store, &root_b, "run-b-1", "b <- 1");
+            let expected_a = store.list_runs(&root_a, None).unwrap();
+            let expected_a_one = store.list_runs(&root_a, Some(1)).unwrap();
+            let expected_b = store.list_runs(&root_b, None).unwrap();
+            drop(store);
+
+            let legacy = test_app_state(tempdir.path(), &project_a, &store_path);
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &legacy).await.unwrap(),
+                &expected_a,
+            );
+
+            let candidate = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            candidate
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_a.clone(), None, &candidate, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &candidate).await.unwrap(),
+                &expected_a,
+            );
+            assert_run_summaries_equal(
+                list_runs_with_state(Some(1), &candidate).await.unwrap(),
+                &expected_a_one,
+            );
+            assert!(
+                list_runs_with_state(Some(0), &candidate)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+
+            candidate
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_b.clone(), None, &candidate, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &candidate).await.unwrap(),
+                &expected_b,
+            );
+
+            candidate
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_empty, None, &candidate, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            assert!(
+                list_runs_with_state(None, &candidate)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let restarted = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            restarted
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_a, None, &restarted, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &restarted).await.unwrap(),
+                &expected_a,
+            );
+        });
+    }
+
+    #[test]
+    fn late_run_history_result_is_rejected_across_project_a_b_a() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a).unwrap();
+            std::fs::create_dir_all(&project_b).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            let root_b = normalize_project_root(project_b.to_string_lossy().as_ref());
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&root_a)).unwrap();
+            create_run_fixture(&mut store, &root_a, "run-a", "a <- 1");
+            create_run_fixture(&mut store, &root_b, "run-b", "b <- 1");
+            let expected_a = store.list_runs(&root_a, None).unwrap();
+            let expected_b = store.list_runs(&root_b, None).unwrap();
+            drop(store);
+
+            let state = Arc::new(test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            ));
+            let started = Arc::new(Semaphore::new(0));
+            let release = Arc::new(Semaphore::new(0));
+            let delayed = state
+                .extension_host
+                .build_project_candidate(
+                    super::extension_project_scope_id(&root_a).unwrap(),
+                    vec![Arc::new(DelayedRunHistoryPlugin::new(
+                        Arc::clone(&started),
+                        Arc::clone(&release),
+                        serde_json::to_value(&expected_a).unwrap(),
+                    ))],
+                    Arc::new(rho_extension_runtime::RejectingBrokerFacade),
+                )
+                .await
+                .unwrap();
+            state
+                .extension_host
+                .publish_project_candidate(None, delayed)
+                .await
+                .unwrap();
+
+            let call_state = Arc::clone(&state);
+            let old_call =
+                tokio::spawn(async move { list_runs_with_state(None, call_state.as_ref()).await });
+            started.acquire().await.unwrap().forget();
+
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            let switch_state = Arc::clone(&state);
+            let switch_project_b = project_b.clone();
+            let switch = tokio::spawn(async move {
+                switch_project_with_watcher_factory(
+                    switch_project_b,
+                    None,
+                    switch_state.as_ref(),
+                    |_| Ok(ProjectWatcherControl::noop()),
+                )
+                .await
+            });
+            // Full-workspace parallel tests can briefly starve this task while
+            // the switch remains bounded; five seconds avoids a scheduler-only
+            // failure without relaxing the stale-generation assertion.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if *state.project_root.read().await == project_b {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("project B must become authoritative before old call is released");
+            release.add_permits(1);
+
+            let error = old_call.await.unwrap().unwrap_err();
+            assert!(error.contains("stale activation generation"));
+            assert_eq!(switch.await.unwrap().unwrap().status, "ready");
+            assert_run_summaries_equal(
+                list_runs_with_state(None, state.as_ref()).await.unwrap(),
+                &expected_b,
+            );
+
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            assert_eq!(
+                switch_project_with_watcher_factory(project_a, None, state.as_ref(), |_| Ok(
+                    ProjectWatcherControl::noop()
+                ),)
+                .await
+                .unwrap()
+                .status,
+                "ready"
+            );
+            assert_run_summaries_equal(
+                list_runs_with_state(None, state.as_ref()).await.unwrap(),
+                &expected_a,
+            );
+        });
+    }
+
+    #[test]
+    fn run_history_missing_contribution_and_activation_failure_fail_closed_after_p1_2() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a).unwrap();
+            std::fs::create_dir_all(&project_b).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            let root_b = normalize_project_root(project_b.to_string_lossy().as_ref());
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&root_a)).unwrap();
+            create_run_fixture(&mut store, &root_a, "run-a", "a <- 1");
+            create_run_fixture(&mut store, &root_b, "run-b", "b <- 1");
+            let expected_a = store.list_runs(&root_a, None).unwrap();
+            drop(store);
+
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_a.clone(), None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let old_scope = state.extension_host.scopes().project().unwrap();
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &state).await.unwrap(),
+                &expected_a,
+            );
+
+            state.switch_test_control.fail(
+                SwitchTestStep::ActivateExtensionCandidate,
+                "inject activation failure",
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            let error = switch_project_with_watcher_factory(project_b, None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("required extension project candidate")
+            );
+            assert_eq!(*state.project_root.read().await, project_a);
+            assert!(Arc::ptr_eq(
+                &state.extension_host.scopes().project().unwrap(),
+                &old_scope
+            ));
+            assert_run_summaries_equal(
+                list_runs_with_state(None, &state).await.unwrap(),
+                &expected_a,
+            );
+
+            let missing_state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            let missing = missing_state
+                .extension_host
+                .build_empty_project_candidate(super::extension_project_scope_id(&root_a).unwrap())
+                .await
+                .unwrap();
+            missing_state
+                .extension_host
+                .publish_project_candidate(None, missing)
+                .await
+                .unwrap();
+            let error = list_runs_with_state(None, &missing_state)
+                .await
+                .unwrap_err();
+            assert!(error.contains("source contribution is missing"));
+        });
+    }
+
+    #[test]
+    fn run_history_handler_error_does_not_silently_fallback() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&root)).unwrap();
+            create_run_fixture(&mut store, &root, "run-a", "a <- 1");
+            drop(store);
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_root,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            let candidate = state
+                .extension_host
+                .build_project_candidate(
+                    super::extension_project_scope_id(&root).unwrap(),
+                    super::internal_plugins_for_scope(
+                        &rho_extension_runtime::ScopePolicy::project_kind(),
+                    ),
+                    Arc::new(super::RunHistoryBrokerFacade {
+                        store_path: tempdir.path().join("missing").join("rho.sqlite"),
+                        project_root: root,
+                    }),
+                )
+                .await
+                .unwrap();
+            state
+                .extension_host
+                .publish_project_candidate(None, candidate)
+                .await
+                .unwrap();
+            let error = list_runs_with_state(None, &state).await.unwrap_err();
+            assert!(error.contains("runs_store_open"));
+        });
+    }
+
+    #[test]
+    fn run_history_candidate_rejects_oversized_store_response_without_fallback() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            let mut store = Store::open(&store_path).unwrap();
+            store.set_project_root(Some(&root)).unwrap();
+            create_run_fixture(&mut store, &root, "run-large", "x <- 1");
+            store
+                .finish_run(&RunFinish {
+                    run_id: "run-large".to_string(),
+                    status: "failed".to_string(),
+                    terminal_reason: Some("r_error".to_string()),
+                    workspace_id: Some("ws-run-large".to_string()),
+                    state_revision_after: Some(2),
+                    project_revision_after: Some(1),
+                    stdout: None,
+                    value_text: None,
+                    messages: Vec::new(),
+                    warnings: Vec::new(),
+                    error_message: Some("x".repeat(1024 * 1024)),
+                    error_call: None,
+                    traceback: Vec::new(),
+                    environment_snapshot_id_after: None,
+                })
+                .unwrap();
+            drop(store);
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_root,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_root, None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let error = list_runs_with_state(None, &state).await.unwrap_err();
+            assert!(error.contains("broker payload is too large"));
+        });
+    }
+
+    #[test]
+    fn runs_broker_rejects_unknown_request_fields_before_store_dispatch() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            Store::open(&store_path).unwrap();
+            let facade = super::RunHistoryBrokerFacade {
+                store_path,
+                project_root: "project.a".to_string(),
+            };
+            for payload in [
+                json!({ "limit": 1, "unknown": true }),
+                json!({ "limit": -1 }),
+                json!({ "limit": "one" }),
+            ] {
+                let request = rho_extension_runtime::BrokerRequest::new(
+                    super::runs_broker_operation_id(),
+                    payload,
+                    rho_extension_runtime::BrokerResponseClass::Generic,
+                )
+                .unwrap();
+                assert!(matches!(
+                    facade.call(request).await,
+                    Err(rho_extension_runtime::BrokerError::Rejected { ref code, .. })
+                        if code == "runs_request_invalid"
+                ));
+            }
+        });
+    }
+
+    #[test]
+    fn candidate_scope_rolls_back_for_each_bh2_post_workspace_failure() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            for (case, failed_step, watcher_fails) in [
+                ("watcher", None, true),
+                ("store", Some(SwitchTestStep::SetActiveProjectRoot), false),
+                (
+                    "last-opened",
+                    Some(SwitchTestStep::SaveLastOpenedProject),
+                    false,
+                ),
+            ] {
+                let tempdir = TempDir::new().unwrap();
+                let project_a = tempdir.path().join(format!("project-a-{case}"));
+                let project_b = tempdir.path().join(format!("project-b-{case}"));
+                std::fs::create_dir_all(&project_a).unwrap();
+                std::fs::create_dir_all(&project_b).unwrap();
+                let store_path = tempdir.path().join("rho.sqlite");
+                let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+                Store::open(&store_path)
+                    .unwrap()
+                    .set_project_root(Some(&root_a))
+                    .unwrap();
+                let state = test_app_state_with_extension_mode(
+                    tempdir.path(),
+                    &project_a,
+                    &store_path,
+                    InternalExtensionRuntimeMode::Candidate,
+                );
+                state
+                    .switch_test_control
+                    .succeed_without_running(SwitchTestStep::SyncWorkspace);
+                switch_project_with_watcher_factory(project_a.clone(), None, &state, |_| {
+                    Ok(ProjectWatcherControl::noop())
+                })
+                .await
+                .unwrap();
+                let previous_scope = state.extension_host.scopes().project().unwrap();
+
+                state
+                    .switch_test_control
+                    .succeed_without_running(SwitchTestStep::SyncWorkspace);
+                state
+                    .switch_test_control
+                    .succeed_without_running(SwitchTestStep::RestoreWorkspace);
+                if let Some(step) = failed_step {
+                    state
+                        .switch_test_control
+                        .fail(step, format!("inject {case} failure"));
+                }
+                let response = switch_project_with_watcher_factory(project_b, None, &state, |_| {
+                    if watcher_fails {
+                        Err(anyhow::anyhow!("inject watcher failure"))
+                    } else {
+                        Ok(ProjectWatcherControl::noop())
+                    }
+                })
+                .await
+                .unwrap();
+
+                assert_eq!(response.status, "failed_restored", "case {case}");
+                let current_scope = state.extension_host.scopes().project().unwrap();
+                assert!(Arc::ptr_eq(&current_scope, &previous_scope), "case {case}");
+                assert_eq!(current_scope.state(), ScopeLifecycleState::Active);
+                assert_eq!(
+                    state
+                        .project_root
+                        .read()
+                        .await
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    project_a.to_string_lossy().replace('\\', "/")
+                );
+                assert_eq!(
+                    Store::open(&store_path)
+                        .unwrap()
+                        .active_project_root()
+                        .unwrap()
+                        .as_deref(),
+                    Some(root_a.as_str())
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn candidate_build_failure_precedes_every_bh2_side_effect() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a).unwrap();
+            std::fs::create_dir_all(&project_b).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            Store::open(&store_path)
+                .unwrap()
+                .set_project_root(Some(&root_a))
+                .unwrap();
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_a.clone(), None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let previous_scope = state.extension_host.scopes().project().unwrap();
+
+            state.switch_test_control.fail(
+                SwitchTestStep::BuildExtensionCandidate,
+                "inject extension candidate failure",
+            );
+            state.switch_test_control.fail(
+                SwitchTestStep::SyncWorkspace,
+                "workspace step must remain untouched",
+            );
+            let error = switch_project_with_watcher_factory(project_b, None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("extension candidate failure"));
+            assert!(matches!(
+                state
+                    .switch_test_control
+                    .take(SwitchTestStep::SyncWorkspace),
+                Some(super::SwitchTestDirective::Fail(_))
+            ));
+            assert!(Arc::ptr_eq(
+                &state.extension_host.scopes().project().unwrap(),
+                &previous_scope
+            ));
+            assert_eq!(
+                state
+                    .project_root
+                    .read()
+                    .await
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                project_a.to_string_lossy().replace('\\', "/")
+            );
+            assert_eq!(
+                Store::open(&store_path)
+                    .unwrap()
+                    .active_project_root()
+                    .unwrap()
+                    .as_deref(),
+                Some(root_a.as_str())
+            );
+        });
+    }
+
+    #[test]
+    fn workspace_sync_failure_rolls_back_unpublished_candidate_generation() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_a = tempdir.path().join("project-a");
+            let project_b = tempdir.path().join("project-b");
+            std::fs::create_dir_all(&project_a).unwrap();
+            std::fs::create_dir_all(&project_b).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let root_a = normalize_project_root(project_a.to_string_lossy().as_ref());
+            Store::open(&store_path)
+                .unwrap()
+                .set_project_root(Some(&root_a))
+                .unwrap();
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_a,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_a.clone(), None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let previous_scope = state.extension_host.scopes().project().unwrap();
+
+            state
+                .switch_test_control
+                .fail(SwitchTestStep::SyncWorkspace, "inject workspace failure");
+            assert!(
+                switch_project_with_watcher_factory(project_b.clone(), None, &state, |_| Ok(
+                    ProjectWatcherControl::noop()
+                ),)
+                .await
+                .is_err()
+            );
+            assert!(Arc::ptr_eq(
+                &state.extension_host.scopes().project().unwrap(),
+                &previous_scope
+            ));
+
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_b, None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let current = state.extension_host.scopes().project().unwrap();
+            assert_eq!(current.identity().generation.get(), 4);
+            assert_eq!(previous_scope.state(), ScopeLifecycleState::Disposed);
+        });
+    }
+
+    #[test]
+    fn desktop_shutdown_disposes_extension_project_before_application() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let normalized_root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            Store::open(&store_path)
+                .unwrap()
+                .set_project_root(Some(&normalized_root))
+                .unwrap();
+            let state = test_app_state_with_extension_mode(
+                tempdir.path(),
+                &project_root,
+                &store_path,
+                InternalExtensionRuntimeMode::Candidate,
+            );
+            state
+                .switch_test_control
+                .succeed_without_running(SwitchTestStep::SyncWorkspace);
+            switch_project_with_watcher_factory(project_root, None, &state, |_| {
+                Ok(ProjectWatcherControl::noop())
+            })
+            .await
+            .unwrap();
+            let project = state.extension_host.scopes().project().unwrap();
+            let application = state.extension_host.scopes().application();
+
+            shutdown_application(&state).await.unwrap();
+            assert_eq!(project.state(), ScopeLifecycleState::Disposed);
+            assert_eq!(application.state(), ScopeLifecycleState::Disposed);
+        });
+    }
+
+    #[test]
+    fn desktop_shutdown_waits_for_project_transition_gate() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let tempdir = TempDir::new().unwrap();
+            let project_root = tempdir.path().join("project-a");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let store_path = tempdir.path().join("rho.sqlite");
+            let normalized_root = normalize_project_root(project_root.to_string_lossy().as_ref());
+            Store::open(&store_path)
+                .unwrap()
+                .set_project_root(Some(&normalized_root))
+                .unwrap();
+            let state = Arc::new(test_app_state(tempdir.path(), &project_root, &store_path));
+            let transition = state.project_transition_gate.lock().await;
+            let closing_state = Arc::clone(&state);
+            let closing = tokio::spawn(async move { shutdown_application(&closing_state).await });
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert!(!closing.is_finished());
+            drop(transition);
+            closing.await.unwrap().unwrap();
         });
     }
 
@@ -9985,10 +12973,23 @@ mod tests {
         assert!(r_architecture_supported("macos", "aarch64", "arm64"));
         assert!(!r_architecture_supported("macos", "aarch64", "x86_64"));
         assert!(r_architecture_supported("windows", "x86_64", "x86_64"));
+        assert!(r_architecture_supported("linux", "x86_64", "x86_64"));
+        assert!(!r_architecture_supported("linux", "x86_64", "aarch64"));
+        assert!(!r_architecture_supported("linux", "x86_64", "arm64"));
+        assert!(r_architecture_supported("linux", "aarch64", "aarch64"));
 
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             assert!(ensure_supported_r_architecture("aarch64").is_ok());
             assert!(ensure_supported_r_architecture("x86_64").is_err());
+        }
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert!(ensure_supported_r_architecture("x86_64").is_ok());
+            assert!(ensure_supported_r_architecture("aarch64").is_err());
+            let detail = ensure_supported_r_architecture("aarch64")
+                .unwrap_err()
+                .to_string();
+            assert!(detail.contains("R_ARCH_MISMATCH"));
+            assert!(detail.contains("Rho for Linux x64 requires x86_64 R"));
         }
     }
 
@@ -10055,6 +13056,84 @@ mod tests {
     }
 
     #[test]
+    fn ark_lookup_prefers_installed_linux_sidecar_and_falls_back_to_development() {
+        let directory = TempDir::new().unwrap();
+        let manifest_dir = directory.path().join("desktop/src-tauri");
+        let resource_dir = directory.path().join("usr/share/rho");
+        let current_exe = directory.path().join("usr/bin/rho-desktop");
+        std::fs::create_dir_all(current_exe.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(manifest_dir.join("binaries")).unwrap();
+        let candidates = ark_candidate_paths(
+            "linux",
+            "x86_64",
+            &manifest_dir,
+            &resource_dir,
+            &current_exe,
+        );
+        let bundled = resource_dir.join("resources/runtime/ark");
+        let installed = current_exe.parent().unwrap().join("ark");
+        let deb_development = manifest_dir.join("../resources/runtime/ark");
+        let development = manifest_dir.join("binaries/ark-x86_64-unknown-linux-gnu");
+        assert_eq!(
+            candidates,
+            vec![
+                bundled.clone(),
+                installed.clone(),
+                deb_development.clone(),
+                development.clone()
+            ]
+        );
+
+        std::fs::write(&development, b"development").unwrap();
+        assert_eq!(
+            locate_ark_from_candidates(candidates.clone()).unwrap(),
+            development
+        );
+        std::fs::write(&installed, b"installed").unwrap();
+        assert_eq!(locate_ark_from_candidates(candidates).unwrap(), installed);
+    }
+
+    #[test]
+    fn ark_lookup_linux_aarch64_prefers_bundled_deb_runtime_then_development() {
+        let directory = TempDir::new().unwrap();
+        let manifest_dir = directory.path().join("desktop/src-tauri");
+        let resource_dir = directory.path().join("usr/share/rho");
+        let current_exe = directory.path().join("usr/bin/rho-desktop");
+        std::fs::create_dir_all(current_exe.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(manifest_dir.join("binaries")).unwrap();
+        std::fs::create_dir_all(manifest_dir.join("../resources/runtime")).unwrap();
+        std::fs::create_dir_all(resource_dir.join("resources/runtime")).unwrap();
+        let candidates = ark_candidate_paths(
+            "linux",
+            "aarch64",
+            &manifest_dir,
+            &resource_dir,
+            &current_exe,
+        );
+        let bundled = resource_dir.join("resources/runtime/ark");
+        let installed = current_exe.parent().unwrap().join("ark");
+        let deb_development = manifest_dir.join("../resources/runtime/ark");
+        let development = manifest_dir.join("binaries/ark-aarch64-unknown-linux-gnu");
+        assert_eq!(
+            candidates,
+            vec![
+                bundled.clone(),
+                installed.clone(),
+                deb_development.clone(),
+                development.clone()
+            ]
+        );
+
+        std::fs::write(&development, b"development").unwrap();
+        assert_eq!(
+            locate_ark_from_candidates(candidates.clone()).unwrap(),
+            development
+        );
+        std::fs::write(&bundled, b"bundled").unwrap();
+        assert_eq!(locate_ark_from_candidates(candidates).unwrap(), bundled);
+    }
+
+    #[test]
     fn ark_lookup_retains_windows_resources_and_rejects_unknown_targets() {
         let root = Path::new("C:/rho");
         let windows = ark_candidate_paths(
@@ -10088,21 +13167,29 @@ mod tests {
 
     #[test]
     fn parses_base_r_probe_without_requiring_user_startup_files() {
-        let probe = parse_r_runtime_probe(
+        // The probe parser validates the reported architecture against the
+        // current platform, so the fixture must use an arch the host accepts:
+        // Apple Silicon accepts aarch64; every other host accepts x86_64.
+        let arch = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        let probe = parse_r_runtime_probe(&format!(
             "__RHO_HOME__C:/Program Files/R/R-4.4.2\n\
              __RHO_BIN__C:/Program Files/R/R-4.4.2/bin/x64\n\
-             __RHO_ARCH__aarch64\n\
+             __RHO_ARCH__{arch}\n\
              __RHO_PATH_SEP__;\n\
              __RHO_VERSION__R version 4.4.2\n\
              __RHO_VERSION_NUMBER__4.4.2\n\
              __RHO_PROFILE_USER__C:/Users/test/Documents/.Rprofile\n\
              __RHO_ENVIRON_USER__C:/Users/test/Documents/.Renviron\n\
-             __RHO_LIBS__C:/Users/test/R/win-library/4.4;C:/Program Files/R/R-4.4.2/library\n",
-        )
+             __RHO_LIBS__C:/Users/test/R/win-library/4.4;C:/Program Files/R/R-4.4.2/library\n"
+        ))
         .unwrap();
         assert_eq!(probe.r_home, "C:/Program Files/R/R-4.4.2");
         assert!(probe.r_bin.ends_with("bin/x64"));
-        assert_eq!(probe.r_arch, "aarch64");
+        assert_eq!(probe.r_arch, arch);
         assert_eq!(probe.path_sep, ";");
         assert_eq!(probe.r_version, "R version 4.4.2");
         assert!(probe.r_libs.contains("win-library"));
@@ -10123,14 +13210,21 @@ mod tests {
             assert!(x86.to_string().contains("R_ARCH_MISMATCH"));
         }
 
-        let old = parse_r_runtime_probe(
+        // Same platform-valid arch as the parse test above: the version gate
+        // (not the architecture gate) must be what rejects this old R.
+        let arch = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        let old = parse_r_runtime_probe(&format!(
             "__RHO_HOME__/Library/Frameworks/R.framework/Resources\n\
              __RHO_BIN__/Library/Frameworks/R.framework/Resources/bin\n\
-             __RHO_ARCH__aarch64\n\
+             __RHO_ARCH__{arch}\n\
              __RHO_PATH_SEP__:\n\
              __RHO_VERSION__R version 4.3.3\n\
-             __RHO_VERSION_NUMBER__4.3.3\n",
-        )
+             __RHO_VERSION_NUMBER__4.3.3\n"
+        ))
         .unwrap_err();
         assert!(old.to_string().contains("requires R 4.4"));
     }
@@ -10622,7 +13716,11 @@ mod tests {
 }
 
 async fn smoke_test(include_agent: bool) -> Result<Value> {
-    let smoke_root = std::env::temp_dir().join(format!("rho-desktop-smoke-{}", Uuid::new_v4()));
+    let smoke_directory = tempfile::Builder::new()
+        .prefix("rho-desktop-smoke-")
+        .tempdir()
+        .context("creating isolated desktop smoke directory")?;
+    let smoke_root = smoke_directory.path().to_path_buf();
     let data_dir = smoke_root.join("data");
     let project_a_root = smoke_root.join("project-a");
     let project_b_root = smoke_root.join("project-b");
@@ -10840,8 +13938,7 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
     );
 
     session.shutdown().await?;
-    #[allow(unused_mut)]
-    let mut session = ArkSession::launch(&ArkLaunchConfig::new(&config.kernelspec)).await?;
+    let session = Arc::new(ArkSession::launch(&ArkLaunchConfig::new(&config.kernelspec)).await?);
     let mut broker = BrokerState::new("desktop_smoke_restart");
     store.save_identity(broker.identity())?;
     bootstrap_bridge(&session, &mut broker, &mut store, &config.bridge_package).await?;
@@ -10879,6 +13976,14 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
     );
 
     let context = Arc::new(Mutex::new(CoordinatorRuntime { broker, store }));
+    let extension_runtime = smoke_extension_runtime(
+        Arc::clone(&session),
+        Arc::clone(&context),
+        &config.store_path,
+        &project_a_root,
+    )
+    .await?;
+    let phase2_wasm_host = smoke_wasm_plugin_host(&config.store_path, &project_a_root)?;
     let agent = if include_agent {
         let turn_id = format!("smoke_turn_{}", Uuid::new_v4());
         let conversation_id = format!("conversation_{turn_id}");
@@ -10919,7 +14024,7 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
                 })?;
         }
         let result = run_agent_turn(
-            &session,
+            session.as_ref(),
             context.clone(),
             config.rscript.clone(),
             Some(config.process_path.clone()),
@@ -10937,6 +14042,8 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
             Arc::new(PendingApprovalRegistry::default()),
             false,
             None,
+            AgentRuntimeAdapters::default(),
+            Vec::new(),
         )
         .await?;
         let completed = result["events"]
@@ -10962,6 +14069,8 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
     };
     #[cfg(not(unix))]
     let crash_recovered = {
+        let mut session = Arc::try_unwrap(session)
+            .map_err(|_| anyhow!("extension smoke retained the restarted Ark session"))?;
         session.shutdown().await?;
         false
     };
@@ -10976,6 +14085,8 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
             "stale_view_rejected": true,
             "project_switch_isolated": true,
             "workspace_restart_project_isolated": true,
+            "extension_runtime": extension_runtime,
+            "phase2_wasm_host": phase2_wasm_host,
             "interrupt_recovered": interrupt_requested,
             "crash_recovered": crash_recovered,
             "project_a_run_count": initial_a_runs.len(),
@@ -10986,6 +14097,1345 @@ async fn smoke_test(include_agent: bool) -> Result<Value> {
         })
     };
     Ok(report)
+}
+
+fn smoke_wasm_plugin_host(store_path: &Path, project_root: &Path) -> Result<Value> {
+    use rho_extension_runtime::{
+        ActivationGeneration, BrokerCallIdSource, CapabilityId, ContributionCallOutcome,
+        ContributionCallRequest, ContributionCallSession, ContributionClock, ContributionError,
+        ContributionInstanceIdentity, ContributionInvocationOrigin, ContributionStore,
+        GrantRequest, GrantSource, GrantStore, GuestStep, HostFrame, HostInstanceId,
+        HostInstanceState, HostMessage, HostProtocolErrorCode, HostRequestId, HostResponse,
+        P2_1_SMOKE_WASM, P2_1_WASI_IMPORT_SMOKE_WASM, P2_2_SMOKE_WASM, PackageDigest,
+        PermissionConstraints, PermissionKind, PluginId, PluginVersion, RuntimeKind, ScopeId,
+        ViewerDocumentV1, WasmHostIdentity, WasmPluginHost, WorkspacePluginManifest,
+    };
+    use rho_store::{
+        PluginLifecycleMutationService, PluginLifecycleQueryService, PluginPermissionDecision,
+        PluginPermissionDecisionDraft, PluginPermissionMutationOutcome,
+        PluginPermissionMutationService, PluginPermissionQueryService,
+        PluginPermissionRequestDraft,
+    };
+
+    #[derive(Debug)]
+    struct SmokeCallId;
+    impl BrokerCallIdSource for SmokeCallId {
+        fn next_call_id(&self) -> u64 {
+            42
+        }
+    }
+
+    #[derive(Debug)]
+    struct SmokeClock;
+    impl ContributionClock for SmokeClock {
+        fn now_millis(&self) -> u64 {
+            100
+        }
+    }
+
+    let identity = WasmHostIdentity::new(
+        ScopeId::new("project.installed-smoke")?,
+        PluginId::new("org.yulab.rho.phase2-smoke")?,
+        PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_1_SMOKE_WASM)]),
+        ActivationGeneration::new(1)?,
+        HostInstanceId::generate(),
+    );
+    let mut host = WasmPluginHost::from_bytes(identity, P2_1_SMOKE_WASM)
+        .map_err(|error| anyhow!("creating installed P2-1 Wasm host: {error:?}"))?;
+    let make_frame = |host: &WasmPluginHost, message| HostFrame {
+        instance_id: host.identity().host_instance_id().clone(),
+        message,
+    };
+    ensure!(
+        host.handle_frame(make_frame(
+            &host,
+            HostMessage::Hello {
+                api_version: rho_extension_runtime::HOST_PROTOCOL_VERSION,
+            },
+        ))
+        .map_err(|error| anyhow!("negotiating installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::Ready {
+                api_version: rho_extension_runtime::HOST_PROTOCOL_VERSION,
+            }),
+        "installed P2-1 Wasm host did not negotiate V1"
+    );
+    ensure!(
+        host.handle_frame(make_frame(&host, HostMessage::Activate))
+            .map_err(|error| anyhow!("activating installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::Activated),
+        "installed P2-1 Wasm host did not activate"
+    );
+    let request_id = HostRequestId::new("request.installed-smoke")?;
+    ensure!(
+        host.handle_frame(make_frame(
+            &host,
+            HostMessage::Echo {
+                request_id: request_id.clone(),
+                payload: "Rho P2 Wasm".to_string(),
+            },
+        ))
+        .map_err(|error| anyhow!("calling installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::EchoResult {
+                request_id,
+                payload: "Rho P2 Wasm".to_string(),
+            }),
+        "installed P2-1 Wasm host echo diverged"
+    );
+    ensure!(
+        host.handle_frame(make_frame(&host, HostMessage::Heartbeat))
+            .map_err(|error| anyhow!("heartbeating installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::HeartbeatAck),
+        "installed P2-1 Wasm host heartbeat failed"
+    );
+    ensure!(
+        host.handle_frame(make_frame(&host, HostMessage::Quiesce))
+            .map_err(|error| anyhow!("quiescing installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::Quiesced),
+        "installed P2-1 Wasm host did not quiesce"
+    );
+    ensure!(
+        host.handle_frame(make_frame(&host, HostMessage::Dispose))
+            .map_err(|error| anyhow!("disposing installed P2-1 Wasm host: {error:?}"))?
+            == Some(HostResponse::Disposed)
+            && host.state() == HostInstanceState::Disposed,
+        "installed P2-1 Wasm host did not dispose"
+    );
+
+    let forbidden_identity = WasmHostIdentity::new(
+        ScopeId::new("project.installed-smoke")?,
+        PluginId::new("org.yulab.rho.phase2-wasi-probe")?,
+        PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_1_WASI_IMPORT_SMOKE_WASM)]),
+        ActivationGeneration::new(1)?,
+        HostInstanceId::generate(),
+    );
+    let wasi_error = WasmPluginHost::from_bytes(forbidden_identity, P2_1_WASI_IMPORT_SMOKE_WASM)
+        .expect_err("installed P2-1 Wasm host accepted a WASI import");
+    ensure!(
+        wasi_error.code == HostProtocolErrorCode::ForbiddenImport,
+        "installed P2-1 Wasm host rejected WASI with the wrong error"
+    );
+
+    let v2_host_instance = HostInstanceId::generate();
+    let v2_identity = WasmHostIdentity::new(
+        ScopeId::new("project.installed-smoke")?,
+        PluginId::new("org.yulab.rho.phase2-v2-smoke")?,
+        PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_2_SMOKE_WASM)]),
+        ActivationGeneration::new(2)?,
+        v2_host_instance.clone(),
+    );
+    let mut v2_host = WasmPluginHost::from_bytes_with_call_id_source(
+        v2_identity,
+        P2_2_SMOKE_WASM,
+        Arc::new(SmokeCallId),
+    )
+    .map_err(|error| anyhow!("creating installed P2-2 Wasm host: {error:?}"))?;
+    ensure!(
+        v2_host.guest_abi_version() == 2,
+        "installed P2-2 ABI is not V2"
+    );
+    ensure!(
+        v2_host
+            .handle_frame(HostFrame {
+                instance_id: v2_host_instance.clone(),
+                message: HostMessage::Hello {
+                    api_version: rho_extension_runtime::HOST_PROTOCOL_VERSION,
+                },
+            })
+            .map_err(|error| anyhow!("negotiating installed P2-2 Wasm host: {error:?}"))?
+            == Some(HostResponse::Ready {
+                api_version: rho_extension_runtime::HOST_PROTOCOL_VERSION,
+            }),
+        "installed P2-2 Wasm host negotiation failed"
+    );
+    ensure!(
+        v2_host
+            .handle_frame(HostFrame {
+                instance_id: v2_host_instance.clone(),
+                message: HostMessage::Activate,
+            })
+            .map_err(|error| anyhow!("activating installed P2-2 Wasm host: {error:?}"))?
+            == Some(HostResponse::Activated),
+        "installed P2-2 Wasm host activation failed"
+    );
+    let v2_request = HostRequestId::new("request.installed-v2-smoke")?;
+    let yielded = v2_host
+        .begin_broker_call(v2_request.clone(), json!({"smoke": true}))
+        .map_err(|error| anyhow!("yielding installed P2-2 broker call: {error:?}"))?;
+    ensure!(
+        matches!(yielded, GuestStep::BrokerRequest { .. })
+            && !format!("{yielded:?}").contains("handle."),
+        "installed P2-2 broker yield was not typed and redacted"
+    );
+    ensure!(
+        matches!(
+            v2_host
+                .resume_broker_call(&v2_request, &json!({"ok": false}), 0)
+                .map_err(|error| anyhow!("resuming installed P2-2 broker call: {error:?}"))?,
+            GuestStep::Complete { .. }
+        ),
+        "installed P2-2 broker resume did not complete"
+    );
+
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let constraints = PermissionConstraints {
+        paths: vec!["data/**/*.csv".to_string()],
+        max_bytes: Some(1024),
+        ..Default::default()
+    };
+    let mut grants = GrantStore::new();
+    let handle = grants.grant(GrantRequest {
+        durable_grant_id: "grant.installed-smoke".to_string(),
+        normalized_project_root: "/tmp/rho-installed-smoke".to_string(),
+        plugin_id: PluginId::new("org.yulab.rho.phase2-v2-smoke")?,
+        plugin_version: PluginVersion::parse("1.0.0")?,
+        runtime_kind: RuntimeKind::Wasm,
+        host_instance_id: v2_host_instance,
+        package_digest: PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_2_SMOKE_WASM)]),
+        project_id: ScopeId::new("project.installed-smoke")?,
+        scope_id: ScopeId::new("project.installed-smoke")?,
+        activation_generation: ActivationGeneration::new(2)?,
+        permission: PermissionKind::ProjectFsRead,
+        constraints_digest: constraints.digest()?,
+        constraints,
+        grant_source: GrantSource::Project,
+        policy_revision: 1,
+        workspace: None,
+        expires_at_millis: now_millis + 60_000,
+    })?;
+    ensure!(
+        handle.id.len() == "handle.".len() + 64 && !format!("{handle:?}").contains(&handle.id),
+        "installed P2-2 handle is not 256-bit and redacted"
+    );
+    ensure!(
+        grants.revoke_durable_grant("grant.installed-smoke")
+            && !grants.has_live_durable_grant("grant.installed-smoke"),
+        "installed P2-2 revoke did not remove live authority"
+    );
+
+    let normalized_project_root = normalize_project_root(project_root.to_string_lossy().as_ref());
+    let package_digest = PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_2_SMOKE_WASM)]);
+    let persisted_constraints = PermissionConstraints {
+        paths: vec!["data/**/*.csv".to_string()],
+        max_bytes: Some(1024),
+        ..Default::default()
+    };
+    let constraints_json = persisted_constraints.canonical_json()?;
+    let constraints_digest = persisted_constraints.digest()?;
+    let mut persisted = Store::open(store_path)?;
+    PluginPermissionMutationService::new(&mut persisted).create_request(
+        &normalized_project_root,
+        &PluginPermissionRequestDraft {
+            request_id: "request.installed-smoke".to_string(),
+            project_root: normalized_project_root.clone(),
+            plugin_id: "org.yulab.rho.phase2-v2-smoke".to_string(),
+            plugin_version: "1.0.0".to_string(),
+            package_digest: package_digest.to_string(),
+            runtime_kind: "wasm".to_string(),
+            permission: "project.fs.read".to_string(),
+            constraints_json,
+            constraints_digest,
+            purpose_text: Some("Installed P2-2 smoke".to_string()),
+            expected_project_revision: 1,
+        },
+    )?;
+    let durable_grant_id = "grant.persisted-installed-smoke";
+    let decision = PluginPermissionMutationService::new(&mut persisted).resolve_request(
+        &normalized_project_root,
+        &PluginPermissionDecisionDraft {
+            request_id: "request.installed-smoke".to_string(),
+            project_root: normalized_project_root.clone(),
+            expected_project_revision: 1,
+            decision: PluginPermissionDecision::AllowOnce,
+            reason_code: None,
+            grant_id: Some(durable_grant_id.to_string()),
+            policy_revision: Some(1),
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::minutes(4)).to_rfc3339()),
+        },
+    )?;
+    ensure!(
+        decision == PluginPermissionMutationOutcome::Applied,
+        "installed P2-2 durable grant decision was not applied"
+    );
+    ensure!(
+        PluginPermissionMutationService::new(&mut persisted).revoke_grant(
+            &normalized_project_root,
+            durable_grant_id,
+            "installed_smoke_revoke",
+        )? == PluginPermissionMutationOutcome::Applied,
+        "installed P2-2 durable revoke was not applied"
+    );
+    let persisted_events = PluginPermissionQueryService::new(&persisted)
+        .list_events(&normalized_project_root, Some(20))?;
+    ensure!(
+        persisted_events
+            .iter()
+            .any(|event| event.event_type == "request_granted")
+            && persisted_events
+                .iter()
+                .any(|event| event.event_type == "grant_revoked"),
+        "installed P2-2 durable audit events are incomplete"
+    );
+    ensure!(
+        !serde_json::to_string(&persisted_events)?.contains("handle."),
+        "installed P2-2 durable audit exposed a raw handle"
+    );
+
+    let empty_schema = json!({"type": "object", "properties": {}});
+    let manifest = WorkspacePluginManifest::parse(&serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "id": "org.yulab.rho.phase2-contribution-smoke",
+        "name": "Installed contribution smoke",
+        "version": "1.0.0",
+        "apiVersion": "^1.0",
+        "runtime": {"kind": "wasm", "entry": "dist/plugin.wasm", "scope": "project"},
+        "provides": [
+            {"capability": "tool.installed.smoke", "contract_major": 1},
+            {"capability": "ui.panel.installed_smoke", "contract_major": 1}
+        ],
+        "contributions": [
+            {
+                "id": "tool.installed.smoke", "kind": "tool", "contractMajor": 1,
+                "label": "Installed smoke", "purpose": "Exercise the packaged contribution proxy",
+                "inputSchema": empty_schema,
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {"smoke": {"type": "boolean"}},
+                    "required": ["smoke"]
+                }
+            },
+            {
+                "id": "ui.panel.installed_smoke", "kind": "panel", "contractMajor": 1,
+                "label": "Installed details", "purpose": "Exercise the named project Panel",
+                "inputSchema": empty_schema, "outputSchema": empty_schema,
+                "panelSlot": "plugin_details"
+            }
+        ]
+    }))?)?;
+    let p23_project = ScopeId::new("project.installed-contribution-smoke")?;
+    let p23_plugin = manifest.id.clone();
+    let p23_digest = PackageDigest::from_inventory(&[(b"dist/plugin.wasm", P2_2_SMOKE_WASM)]);
+    let p23_host_id = HostInstanceId::new("instance.installed-contribution-smoke")?;
+    let p23_generation = ActivationGeneration::new(3)?;
+    let p23_identity = ContributionInstanceIdentity::new(
+        p23_project.clone(),
+        p23_plugin.clone(),
+        p23_digest.clone(),
+        p23_generation,
+        p23_host_id.clone(),
+    );
+    let candidate = ContributionStore::stage(p23_identity.clone(), manifest.contributions.clone())
+        .map_err(|error| anyhow!("staging installed P2-3 contributions: {error:?}"))?;
+    let mut contribution_store = ContributionStore::new();
+    contribution_store
+        .publish(candidate, None)
+        .map_err(|error| anyhow!("publishing installed P2-3 contributions: {error:?}"))?;
+    ensure!(
+        contribution_store.list(&p23_project).len() == 2,
+        "installed P2-3 contribution publication is incomplete"
+    );
+    let stale_candidate = ContributionStore::stage(
+        ContributionInstanceIdentity::new(
+            p23_project.clone(),
+            p23_plugin.clone(),
+            p23_digest.clone(),
+            ActivationGeneration::new(4)?,
+            HostInstanceId::new("instance.installed-stale-candidate")?,
+        ),
+        manifest.contributions.clone(),
+    )
+    .map_err(|error| anyhow!("staging installed stale P2-3 candidate: {error:?}"))?;
+    ensure!(
+        contribution_store.publish(stale_candidate, None)
+            == Err(ContributionError::ExpectedOldMismatch),
+        "installed P2-3 expected-old CAS accepted a stale candidate"
+    );
+    let mut p23_host = WasmPluginHost::from_bytes_with_call_id_source(
+        WasmHostIdentity::new(
+            p23_project.clone(),
+            p23_plugin,
+            p23_digest,
+            p23_generation,
+            p23_host_id.clone(),
+        ),
+        P2_2_SMOKE_WASM,
+        Arc::new(SmokeCallId),
+    )
+    .map_err(|error| anyhow!("creating installed P2-3 Wasm host: {error:?}"))?;
+    ensure!(
+        matches!(
+            p23_host.handle_frame(HostFrame {
+                instance_id: p23_host_id.clone(),
+                message: HostMessage::Hello {
+                    api_version: rho_extension_runtime::HOST_PROTOCOL_VERSION
+                }
+            }),
+            Ok(Some(HostResponse::Ready { .. }))
+        ) && matches!(
+            p23_host.handle_frame(HostFrame {
+                instance_id: p23_host_id,
+                message: HostMessage::Activate
+            }),
+            Ok(Some(HostResponse::Activated))
+        ),
+        "installed P2-3 contribution host did not activate"
+    );
+    let (mut p23_call, p23_first) = ContributionCallSession::begin(
+        &contribution_store,
+        ContributionCallRequest {
+            project_id: p23_project.clone(),
+            contribution_id: CapabilityId::new("tool.installed.smoke")?,
+            origin: ContributionInvocationOrigin::AgentTool,
+            input: json!({}),
+            supplied_handles: BTreeMap::from([(
+                "project.fs.read".to_string(),
+                format!("handle.{}", "a".repeat(64)),
+            )]),
+        },
+        &SmokeClock,
+        &mut p23_host,
+    )
+    .map_err(|error| anyhow!("beginning installed P2-3 contribution call: {error:?}"))?;
+    ensure!(
+        matches!(p23_first, GuestStep::BrokerRequest { .. }),
+        "installed P2-3 contribution did not yield to the broker"
+    );
+    let p23_terminal = p23_call
+        .resume(
+            &contribution_store,
+            &json!({"ok": true}),
+            2,
+            &SmokeClock,
+            &mut p23_host,
+        )
+        .map_err(|error| anyhow!("resuming installed P2-3 contribution call: {error:?}"))?;
+    let p23_outcome = p23_call
+        .finish(
+            &contribution_store,
+            &p23_terminal,
+            &SmokeClock,
+            &mut p23_host,
+        )
+        .map_err(|error| anyhow!("finishing installed P2-3 contribution call: {error:?}"))?;
+    ensure!(
+        matches!(
+            p23_outcome,
+            ContributionCallOutcome::Completed { ref result, .. }
+                if result == &json!({"smoke": true})
+        ),
+        "installed P2-3 contribution result failed schema validation"
+    );
+    let viewer_document = ViewerDocumentV1::parse(json!({
+        "contract": rho_extension_runtime::PLUGIN_VIEWER_DOCUMENT_CONTRACT,
+        "title": "Installed plugin details",
+        "blocks": [{
+            "kind": "text",
+            "text": "<script>packaged text only</script>"
+        }]
+    }))?;
+    ensure!(
+        viewer_document.blocks.len() == 1,
+        "installed P2-3 ViewerDocument did not validate"
+    );
+    contribution_store
+        .unpublish(&p23_identity)
+        .map_err(|error| anyhow!("tearing down installed P2-3 contributions: {error:?}"))?;
+    ensure!(
+        contribution_store.list(&p23_project).is_empty(),
+        "installed P2-3 contribution teardown left a live route"
+    );
+
+    let p24_root = tempfile::tempdir()?;
+    let p24_project = p24_root.path().join("project");
+    let p24_data = p24_root.path().join("data");
+    let p24_plugin = p24_project.join(".rho/plugins/installed-smoke");
+    std::fs::create_dir_all(p24_plugin.join("dist"))?;
+    std::fs::create_dir_all(&p24_data)?;
+    std::fs::write(p24_plugin.join("dist/plugin.wasm"), P2_1_SMOKE_WASM)?;
+    std::fs::write(
+        p24_plugin.join("rho-plugin.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "id": "org.yulab.rho.phase2-durable-enable-smoke",
+            "name": "Durable enable smoke",
+            "version": "1.0.0",
+            "apiVersion": "^1.0",
+            "runtime": {"kind": "wasm", "entry": "dist/plugin.wasm", "scope": "project"}
+        }))?,
+    )?;
+    let p24_project_root =
+        normalize_project_root(p24_project.canonicalize()?.to_string_lossy().as_ref());
+    let p24_context = crate::workspace_plugins::PluginRuntimeContext {
+        app_data_dir: p24_data.clone(),
+        project_root: p24_project_root.clone(),
+        project_revision: 1,
+        project_scope_id: ScopeId::new("project.installed-durable-enable-smoke")?,
+        workspace: None,
+    };
+    let mut p24_store = Store::open(p24_root.path().join("rho.sqlite"))?;
+    let p24_registry = crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    let p24_enabled = p24_registry.request_enable(
+        &p24_context,
+        "org.yulab.rho.phase2-durable-enable-smoke",
+        &mut p24_store,
+    )?;
+    ensure!(
+        p24_enabled.status == "enabled" && p24_enabled.transition_id.is_some(),
+        "installed P2-4 durable first enable did not complete"
+    );
+    let p24_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 lifecycle state is missing")?;
+    ensure!(
+        p24_state.desired_state == "enabled"
+            && p24_state.observed_state == "active"
+            && p24_state.accepted_digest.is_some()
+            && p24_state.pending_digest.is_none()
+            && p24_state.last_activation_generation == 1,
+        "installed P2-4 durable lifecycle truth is incomplete"
+    );
+    let p24_transition = PluginLifecycleQueryService::new(&p24_store)
+        .get_transition(
+            &p24_project_root,
+            p24_enabled.transition_id.as_deref().unwrap_or_default(),
+        )?
+        .context("installed P2-4 lifecycle transition is missing")?;
+    ensure!(
+        p24_transition.phase == "completed" && p24_transition.status == "completed",
+        "installed P2-4 transition did not reach durable completion"
+    );
+    let p24_cached = rho_server::plugin_package_cache::PluginPackageCache::new(&p24_data)
+        .load_exact(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+            p24_state.accepted_digest.as_deref().unwrap_or_default(),
+        )?;
+    ensure!(
+        p24_cached.file_bytes("dist/plugin.wasm") == Some(P2_1_SMOKE_WASM),
+        "installed P2-4 immutable cache read-back diverged"
+    );
+    drop(p24_registry);
+    let p24_restarted = crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    let p24_restart_report = p24_restarted.reconcile_project(&p24_context, &mut p24_store);
+    ensure!(
+        p24_restart_report.reactivated == 1,
+        "installed P2-4 restart did not reconstruct the exact enabled package"
+    );
+    let p24_restarted_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 restarted lifecycle state is missing")?;
+    ensure!(
+        p24_restarted_state.observed_state == "active"
+            && p24_restarted_state.last_activation_generation == 2,
+        "installed P2-4 restart reused or lost activation generation"
+    );
+    let p24_disabled = p24_restarted.disable(
+        &p24_context,
+        "org.yulab.rho.phase2-durable-enable-smoke",
+        &mut p24_store,
+    )?;
+    ensure!(
+        p24_disabled.status == "disabled"
+            && p24_disabled.route_closed
+            && p24_disabled.host_disposed
+            && p24_disabled.errors.is_empty(),
+        "installed P2-4 explicit Disable did not complete exact teardown"
+    );
+    let p24_disabled_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 disabled lifecycle state is missing")?;
+    ensure!(
+        p24_disabled_state.desired_state == "disabled"
+            && p24_disabled_state.observed_state == "disabled",
+        "installed P2-4 explicit Disable did not persist terminal truth"
+    );
+    let p24_reenabled = p24_restarted.request_enable(
+        &p24_context,
+        "org.yulab.rho.phase2-durable-enable-smoke",
+        &mut p24_store,
+    )?;
+    ensure!(
+        p24_reenabled.status == "enabled",
+        "installed P2-4 exact package could not re-enable after Disable"
+    );
+    let p24_boundary = p24_restarted.teardown_project(&p24_context, "shutdown", &mut p24_store);
+    ensure!(
+        p24_boundary.attempted == 1 && p24_boundary.completed == 1 && p24_boundary.forced == 0,
+        "installed P2-4 shutdown boundary did not reuse exact teardown"
+    );
+    let p24_stopped_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 stopped lifecycle state is missing")?;
+    ensure!(
+        p24_stopped_state.desired_state == "enabled"
+            && p24_stopped_state.observed_state == "stopped",
+        "installed P2-4 boundary teardown lost enabled intent or stopped truth"
+    );
+    let p24_boundary_reactivation = p24_restarted.reconcile_project(&p24_context, &mut p24_store);
+    ensure!(
+        p24_boundary_reactivation.reactivated == 1,
+        "installed P2-4 stopped boundary did not reconstruct exactly"
+    );
+    for expected_crash_count in 1..=3 {
+        let crash = p24_restarted.quarantine_timed_out_plugin(
+            &p24_context,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+            &mut p24_store,
+        )?;
+        ensure!(
+            crash.crash_count == expected_crash_count
+                && crash.blocked == (expected_crash_count == 3),
+            "installed P2-4 crash loop count/block state diverged"
+        );
+        if expected_crash_count < 3 {
+            ensure!(
+                p24_restarted
+                    .retry(
+                        &p24_context,
+                        "org.yulab.rho.phase2-durable-enable-smoke",
+                        &mut p24_store,
+                    )?
+                    .status
+                    == "enabled",
+                "installed P2-4 Retry did not create fresh authority"
+            );
+        }
+    }
+    ensure!(
+        p24_restarted
+            .retry(
+                &p24_context,
+                "org.yulab.rho.phase2-durable-enable-smoke",
+                &mut p24_store,
+            )
+            .is_err(),
+        "installed P2-4 blocked crash loop accepted Retry"
+    );
+    ensure!(
+        p24_restarted
+            .disable(
+                &p24_context,
+                "org.yulab.rho.phase2-durable-enable-smoke",
+                &mut p24_store,
+            )?
+            .status
+            == "disabled",
+        "installed P2-4 blocked plugin could not be explicitly disabled"
+    );
+    ensure!(
+        p24_restarted
+            .request_enable(
+                &p24_context,
+                "org.yulab.rho.phase2-durable-enable-smoke",
+                &mut p24_store,
+            )?
+            .status
+            == "enabled",
+        "installed P2-4 reviewed crash loop could not re-enable exactly"
+    );
+    let p24_uninstall_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 Uninstall state is missing")?;
+    let p24_uninstalled = p24_restarted.uninstall(
+        &p24_context,
+        &crate::workspace_plugins::WorkspacePluginUninstallInput {
+            plugin_id: "org.yulab.rho.phase2-durable-enable-smoke".to_string(),
+            directory_name: "installed-smoke".to_string(),
+            package_digest: p24_uninstall_state
+                .accepted_digest
+                .clone()
+                .context("installed P2-4 Uninstall accepted digest is missing")?,
+            expected_project_revision: p24_context.project_revision,
+            confirmed: true,
+        },
+        &mut p24_store,
+    )?;
+    let p24_uninstalled_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 durable Uninstalled state is missing")?;
+    let p24_tombstone = PluginLifecycleQueryService::new(&p24_store)
+        .get_tombstone(&p24_project_root, &p24_uninstalled.tombstone_id)?
+        .context("installed P2-4 recoverable tombstone is missing")?;
+    ensure!(
+        p24_uninstalled.status == "uninstalled"
+            && p24_uninstalled.route_closed
+            && p24_uninstalled_state.desired_state == "uninstalled"
+            && p24_uninstalled_state.observed_state == "uninstalled"
+            && !p24_plugin.exists()
+            && p24_tombstone.restored_at.is_none(),
+        "installed P2-4 recoverable Uninstall truth diverged"
+    );
+    let p24_restored = p24_restarted.restore(
+        &p24_context,
+        &crate::workspace_plugins::WorkspacePluginRestoreInput {
+            tombstone_id: p24_uninstalled.tombstone_id.clone(),
+            expected_project_revision: p24_context.project_revision,
+        },
+        &mut p24_store,
+    )?;
+    let p24_restored_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(
+            &p24_project_root,
+            "org.yulab.rho.phase2-durable-enable-smoke",
+        )?
+        .context("installed P2-4 restored lifecycle state is missing")?;
+    ensure!(
+        p24_restored.status == "disabled"
+            && p24_plugin.is_dir()
+            && p24_restored_state.desired_state == "disabled"
+            && p24_restored_state.observed_state == "disabled"
+            && p24_restored_state.last_host_session_id.is_none()
+            && PluginPermissionQueryService::new(&p24_store)
+                .list_grants(&p24_project_root, Some(100), Some("active"))?
+                .is_empty(),
+        "installed P2-4 Restore created authority or non-disabled truth"
+    );
+    ensure!(
+        p24_restarted
+            .request_enable(
+                &p24_context,
+                "org.yulab.rho.phase2-durable-enable-smoke",
+                &mut p24_store,
+            )?
+            .status
+            == "enabled",
+        "installed P2-4 restored package could not be explicitly re-enabled"
+    );
+    p24_restarted.invalidate_project(&p24_project_root);
+    let p24_manifest_path = p24_plugin.join("rho-plugin.json");
+    let p24_original_manifest = std::fs::read(&p24_manifest_path)?;
+    let mut p24_changed_manifest: Value = serde_json::from_slice(&p24_original_manifest)?;
+    p24_changed_manifest["version"] = json!("2.0.0");
+    std::fs::write(
+        &p24_manifest_path,
+        serde_json::to_vec(&p24_changed_manifest)?,
+    )?;
+    let p24_changed_report = p24_restarted.reconcile_project(&p24_context, &mut p24_store);
+    ensure!(
+        p24_changed_report.update_pending == 1,
+        "installed P2-4 changed package did not remain update-pending"
+    );
+    let p24_changed_list = p24_restarted.list(&p24_context, &mut p24_store)?;
+    ensure!(
+        p24_changed_list
+            .plugins
+            .iter()
+            .any(|plugin| plugin.status == "update_pending"),
+        "installed P2-4 trusted projection hid update-pending state"
+    );
+    let p24_update_project = p24_root.path().join("update-project");
+    let p24_update_plugin = p24_update_project.join(".rho/plugins/update-smoke");
+    std::fs::create_dir_all(p24_update_plugin.join("dist"))?;
+    std::fs::write(p24_update_plugin.join("dist/plugin.wasm"), P2_1_SMOKE_WASM)?;
+    let p24_update_manifest = p24_update_plugin.join("rho-plugin.json");
+    std::fs::write(
+        &p24_update_manifest,
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "id": "org.yulab.rho.phase2-update-smoke",
+            "name": "Update smoke",
+            "version": "1.0.0",
+            "apiVersion": "^1.0",
+            "runtime": {"kind": "wasm", "entry": "dist/plugin.wasm", "scope": "project"}
+        }))?,
+    )?;
+    let p24_update_root = normalize_project_root(
+        p24_update_project
+            .canonicalize()?
+            .to_string_lossy()
+            .as_ref(),
+    );
+    let p24_update_context = crate::workspace_plugins::PluginRuntimeContext {
+        app_data_dir: p24_data.clone(),
+        project_root: p24_update_root.clone(),
+        project_revision: 1,
+        project_scope_id: ScopeId::new("project.installed-update-smoke")?,
+        workspace: None,
+    };
+    let p24_update_registry = crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    ensure!(
+        p24_update_registry
+            .request_enable(
+                &p24_update_context,
+                "org.yulab.rho.phase2-update-smoke",
+                &mut p24_store,
+            )?
+            .status
+            == "enabled",
+        "installed P2-4 Update fixture did not enable"
+    );
+    let p24_update_old = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_update_root, "org.yulab.rho.phase2-update-smoke")?
+        .context("installed P2-4 Update old state is missing")?;
+    let p24_update_old_digest = p24_update_old
+        .accepted_digest
+        .clone()
+        .context("installed P2-4 Update old digest is missing")?;
+    let mut p24_update_changed: Value =
+        serde_json::from_slice(&std::fs::read(&p24_update_manifest)?)?;
+    p24_update_changed["version"] = json!("2.0.0");
+    std::fs::write(
+        &p24_update_manifest,
+        serde_json::to_vec(&p24_update_changed)?,
+    )?;
+    let p24_update_candidate =
+        rho_extension_runtime::discover_workspace_plugins(&p24_update_project)?
+            .context("installed P2-4 Update candidate discovery is missing")?
+            .plugins
+            .into_iter()
+            .find(|plugin| plugin.manifest.id.as_str() == "org.yulab.rho.phase2-update-smoke")
+            .context("installed P2-4 Update candidate is missing")?;
+    let p24_updated = p24_update_registry.request_update(
+        &p24_update_context,
+        &crate::workspace_plugins::WorkspacePluginUpdateInput {
+            plugin_id: "org.yulab.rho.phase2-update-smoke".to_string(),
+            expected_old_digest: p24_update_old_digest.clone(),
+            candidate_digest: p24_update_candidate.digest.to_string(),
+            expected_project_revision: p24_update_context.project_revision,
+        },
+        &mut p24_store,
+    )?;
+    let p24_updated_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_update_root, "org.yulab.rho.phase2-update-smoke")?
+        .context("installed P2-4 Update terminal state is missing")?;
+    ensure!(
+        p24_updated.status == "enabled"
+            && p24_updated_state.accepted_digest.as_deref()
+                == Some(p24_update_candidate.digest.as_str())
+            && p24_updated_state.rollback_digest.as_deref() == Some(p24_update_old_digest.as_str())
+            && p24_updated_state.pending_digest.is_none()
+            && p24_updated_state.last_activation_generation
+                > p24_update_old.last_activation_generation
+            && p24_updated_state.last_host_session_id != p24_update_old.last_host_session_id,
+        "installed P2-4 exact Update did not commit fresh pointer/runtime truth"
+    );
+    let p24_rolled_back = p24_update_registry.request_rollback(
+        &p24_update_context,
+        &crate::workspace_plugins::WorkspacePluginRollbackInput {
+            plugin_id: "org.yulab.rho.phase2-update-smoke".to_string(),
+            expected_current_digest: p24_update_candidate.digest.to_string(),
+            rollback_digest: p24_update_old_digest.clone(),
+            expected_project_revision: p24_update_context.project_revision,
+        },
+        &mut p24_store,
+    )?;
+    let p24_rollback_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_update_root, "org.yulab.rho.phase2-update-smoke")?
+        .context("installed P2-4 Rollback terminal state is missing")?;
+    ensure!(
+        p24_rolled_back.status == "enabled"
+            && p24_rollback_state.accepted_digest.as_deref()
+                == Some(p24_update_old_digest.as_str())
+            && p24_rollback_state.rollback_digest.as_deref()
+                == Some(p24_update_candidate.digest.as_str())
+            && p24_rollback_state.last_activation_generation
+                > p24_updated_state.last_activation_generation
+            && p24_rollback_state.last_host_session_id != p24_updated_state.last_host_session_id
+            && rho_extension_runtime::discover_workspace_plugins(&p24_update_project)?
+                .context("installed Rollback source discovery disappeared")?
+                .plugins
+                .iter()
+                .any(|plugin| plugin.digest == p24_update_candidate.digest),
+        "installed P2-4 exact Rollback did not preserve source or fresh pointer truth"
+    );
+    p24_update_registry.invalidate_project(&p24_update_root);
+    let p24_rollback_restart = crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    let p24_rollback_restart_report =
+        p24_rollback_restart.reconcile_project(&p24_update_context, &mut p24_store);
+    ensure!(
+        p24_rollback_restart_report.reactivated == 1,
+        "installed P2-4 Rollback restart did not reconstruct accepted cache"
+    );
+    let p24_rollback_restart_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_update_root, "org.yulab.rho.phase2-update-smoke")?
+        .context("installed P2-4 Rollback restart state is missing")?;
+    ensure!(
+        p24_rollback_restart_state.accepted_digest.as_deref()
+            == Some(p24_update_old_digest.as_str())
+            && p24_rollback_restart_state.rollback_digest.as_deref()
+                == Some(p24_update_candidate.digest.as_str())
+            && p24_rollback_restart_state.last_activation_generation
+                > p24_rollback_state.last_activation_generation
+            && p24_rollback_restart
+                .list(&p24_update_context, &mut p24_store)?
+                .plugins
+                .iter()
+                .any(|plugin| plugin.status == "update_pending"),
+        "installed P2-4 Rollback restart lost accepted cache or Update-pending source truth"
+    );
+    let p24_recovery_project = p24_root.path().join("recovery-project");
+    let p24_recovery_plugin = p24_recovery_project.join(".rho/plugins/recovery-smoke");
+    std::fs::create_dir_all(p24_recovery_plugin.join("dist"))?;
+    std::fs::write(
+        p24_recovery_plugin.join("dist/plugin.wasm"),
+        P2_1_SMOKE_WASM,
+    )?;
+    std::fs::write(
+        p24_recovery_plugin.join("rho-plugin.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "id": "org.yulab.rho.phase2-recovery-smoke",
+            "name": "Recovery smoke",
+            "version": "1.0.0",
+            "apiVersion": "^1.0",
+            "runtime": {"kind": "wasm", "entry": "dist/plugin.wasm", "scope": "project"}
+        }))?,
+    )?;
+    let p24_recovery_root = normalize_project_root(
+        p24_recovery_project
+            .canonicalize()?
+            .to_string_lossy()
+            .as_ref(),
+    );
+    let p24_recovery_context = crate::workspace_plugins::PluginRuntimeContext {
+        app_data_dir: p24_data.clone(),
+        project_root: p24_recovery_root.clone(),
+        project_revision: 0,
+        project_scope_id: ScopeId::new("project.installed-recovery-smoke")?,
+        workspace: None,
+    };
+    let p24_recovery_registry =
+        crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    p24_recovery_registry.request_enable(
+        &p24_recovery_context,
+        "org.yulab.rho.phase2-recovery-smoke",
+        &mut p24_store,
+    )?;
+    p24_recovery_registry.disable(
+        &p24_recovery_context,
+        "org.yulab.rho.phase2-recovery-smoke",
+        &mut p24_store,
+    )?;
+    let p24_recovery_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_recovery_root, "org.yulab.rho.phase2-recovery-smoke")?
+        .context("installed P2-4 recovery state is missing")?;
+    PluginLifecycleMutationService::new(&mut p24_store).request_transition(
+        &p24_recovery_root,
+        &rho_store::WorkspacePluginTransitionDraft {
+            transition_id: "transition.uninstall.installed-recovery".to_string(),
+            project_root: p24_recovery_root.clone(),
+            plugin_id: "org.yulab.rho.phase2-recovery-smoke".to_string(),
+            kind: "uninstall".to_string(),
+            request_event_type: "user_requested".to_string(),
+            desired_state: "uninstalled".to_string(),
+            expected_old_digest: p24_recovery_state.accepted_digest,
+            candidate_digest: None,
+            rollback_digest: None,
+            backup_path_key: Some("trash.installed-recovery".to_string()),
+        },
+    )?;
+    let first_recovery =
+        p24_recovery_registry.reconcile_project(&p24_recovery_context, &mut p24_store);
+    let mut recovery_revision = BrokerState::new("plugin_recovery_smoke");
+    if first_recovery.project_files_changed {
+        recovery_revision.project_changed();
+    }
+    let second_recovery =
+        p24_recovery_registry.reconcile_project(&p24_recovery_context, &mut p24_store);
+    if second_recovery.project_files_changed {
+        recovery_revision.project_changed();
+    }
+    ensure!(
+        first_recovery.recovered_uninstalls == 1
+            && first_recovery.project_files_changed
+            && second_recovery.recovered_uninstalls == 0
+            && !second_recovery.project_files_changed
+            && recovery_revision.identity().project_revision == 1
+            && !p24_recovery_plugin.exists(),
+        "installed P2-4 Uninstall recovery or once-only revision diverged"
+    );
+    let p24_retention_project = p24_root.path().join("retention-project");
+    let p24_retention_plugin = p24_retention_project.join(".rho/plugins/retention-smoke");
+    std::fs::create_dir_all(p24_retention_plugin.join("dist"))?;
+    std::fs::write(
+        p24_retention_plugin.join("dist/plugin.wasm"),
+        P2_1_SMOKE_WASM,
+    )?;
+    std::fs::write(
+        p24_retention_plugin.join("rho-plugin.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "id": "org.yulab.rho.phase2-retention-smoke",
+            "name": "Retention smoke",
+            "version": "1.0.0",
+            "apiVersion": "^1.0",
+            "runtime": {"kind": "wasm", "entry": "dist/plugin.wasm", "scope": "project"}
+        }))?,
+    )?;
+    let p24_retention_root = normalize_project_root(
+        p24_retention_project
+            .canonicalize()?
+            .to_string_lossy()
+            .as_ref(),
+    );
+    let p24_retention_context = crate::workspace_plugins::PluginRuntimeContext {
+        app_data_dir: p24_data.clone(),
+        project_root: p24_retention_root.clone(),
+        project_revision: 1,
+        project_scope_id: ScopeId::new("project.installed-retention-smoke")?,
+        workspace: None,
+    };
+    let p24_retention_registry =
+        crate::workspace_plugins::PendingPluginPermissionRegistry::default();
+    ensure!(
+        p24_retention_registry
+            .request_enable(
+                &p24_retention_context,
+                "org.yulab.rho.phase2-retention-smoke",
+                &mut p24_store,
+            )?
+            .status
+            == "enabled",
+        "installed P2-4 retention fixture did not enable"
+    );
+    let p24_retention_state = PluginLifecycleQueryService::new(&p24_store)
+        .get_state(&p24_retention_root, "org.yulab.rho.phase2-retention-smoke")?
+        .context("installed P2-4 retention lifecycle state is missing")?;
+    let p24_retention_uninstall = p24_retention_registry.uninstall(
+        &p24_retention_context,
+        &crate::workspace_plugins::WorkspacePluginUninstallInput {
+            plugin_id: "org.yulab.rho.phase2-retention-smoke".to_string(),
+            directory_name: "retention-smoke".to_string(),
+            package_digest: p24_retention_state
+                .accepted_digest
+                .clone()
+                .context("installed P2-4 retention accepted digest is missing")?,
+            expected_project_revision: p24_retention_context.project_revision,
+            confirmed: true,
+        },
+        &mut p24_store,
+    )?;
+    let p24_retention_tombstone = PluginLifecycleQueryService::new(&p24_store)
+        .get_tombstone(&p24_retention_root, &p24_retention_uninstall.tombstone_id)?
+        .context("installed P2-4 retention tombstone is missing")?;
+    let p24_sibling = p24_root.path().join("sibling-project/.rho/plugins/keep");
+    std::fs::create_dir_all(&p24_sibling)?;
+    std::fs::write(p24_sibling.join("sentinel.txt"), b"keep")?;
+    let retention_service = rho_server::plugin_retention::PluginTrashRetentionService::new();
+    let expired = retention_service.expire(
+        &mut p24_store,
+        &p24_retention_root,
+        &p24_retention_tombstone.moved_at,
+        1,
+    )?;
+    ensure!(
+        expired.expired.len() == 1 && expired.expired[0].retention_class == "expired",
+        "installed P2-4 retention expiry did not select the exact tombstone"
+    );
+    let p24_purge_draft = rho_store::WorkspacePluginPurgeDraft {
+        project_root: p24_retention_root.clone(),
+        tombstone_id: p24_retention_tombstone.tombstone_id.clone(),
+        plugin_id: p24_retention_tombstone.plugin_id.clone(),
+        package_digest: p24_retention_tombstone.package_digest.clone(),
+        backup_path_key: p24_retention_tombstone.backup_path_key.clone(),
+        original_directory_name: p24_retention_tombstone.original_directory_name.clone(),
+    };
+    ensure!(
+        PluginLifecycleMutationService::new(&mut p24_store)
+            .request_purge(&p24_retention_root, &p24_purge_draft)?
+            .tombstone
+            .retention_class
+            == "purge_pending",
+        "installed P2-4 purge-pending truth was not durable before deletion"
+    );
+    let p24_purge_recovery =
+        p24_retention_registry.reconcile_project(&p24_retention_context, &mut p24_store);
+    let p24_purged = PluginLifecycleQueryService::new(&p24_store)
+        .get_tombstone(&p24_retention_root, &p24_retention_tombstone.tombstone_id)?
+        .context("installed P2-4 recovered purge tombstone is missing")?;
+    ensure!(
+        p24_purge_recovery.recovered_purges == 1
+            && p24_purge_recovery.project_files_changed
+            && p24_purged.deleted_at.is_some()
+            && p24_purged.retention_class == "expired"
+            && !p24_retention_plugin.exists()
+            && p24_sibling.join("sentinel.txt").is_file(),
+        "installed P2-4 exact purge damaged sibling truth or missed terminal tombstone"
+    );
+    let p24_purge_replay = retention_service.purge_exact_tombstone(
+        &mut p24_store,
+        &p24_retention_root,
+        &p24_retention_tombstone.tombstone_id,
+    )?;
+    ensure!(
+        p24_purge_replay.file_outcome
+            == rho_server::plugin_package_trash::PluginPackageOwnershipOutcome::AlreadyPurged,
+        "installed P2-4 exact purge replay was not idempotent"
+    );
+
+    let mut report = json!({
+        "runtime": "wasmtime-38.0.4",
+        "guest_abi": 1,
+        "guest_echo": true,
+        "heartbeat": true,
+        "disposed": true,
+        "wasi_rejected": true,
+        "imports_exposed": 0,
+        "guest_abi_v2": 2,
+        "broker_yield_resume": true,
+        "grant_handle_bits": 256,
+        "raw_handle_redacted": true,
+        "revoke_enforced": true,
+        "durable_permission_lane": true,
+        "durable_raw_handle_absent": true,
+        "manifest_v2": 2,
+        "contribution_publish_cas": true,
+        "contribution_call_proxy": true,
+        "viewer_document_v1": true,
+        "panel_slot": "plugin_details",
+        "contribution_teardown": true,
+        "schema_v14_lifecycle": true,
+        "exact_package_cache": true,
+        "durable_first_enable": true,
+        "durable_activation_generation": 1,
+        "durable_completion_after_routing": true,
+        "restart_reactivated": true,
+        "restart_generation": 2,
+        "restart_authority_fresh": true,
+        "changed_package_update_pending": true,
+        "explicit_disable": true,
+        "disable_route_closed": true,
+        "disable_host_disposed": true,
+        "disable_terminal_durable": true,
+        "boundary_teardown_reused": true,
+        "boundary_enabled_intent_preserved": true,
+        "boundary_reactivated": true,
+        "crash_state_durable": true,
+        "heartbeat_timeout_classified": true,
+        "retry_fresh_authority": true,
+        "third_crash_blocked": true,
+    });
+    report["recoverable_uninstall"] = json!(true);
+    report["uninstall_tombstone_atomic"] = json!(true);
+    report["uninstall_package_in_trash"] = json!(true);
+    report["restore_disabled_no_authority"] = json!(true);
+    report["retention_expired"] = json!(true);
+    report["purge_pending_durable"] = json!(true);
+    report["exact_trash_purged"] = json!(true);
+    report["purge_tombstone_terminal"] = json!(true);
+    report["purge_sibling_project_preserved"] = json!(true);
+    report["purge_replay_idempotent"] = json!(true);
+    report["update_local_candidate_only"] = json!(true);
+    report["update_expected_old_cas"] = json!(true);
+    report["update_pointer_durable"] = json!(true);
+    report["update_generation_fresh"] = json!(true);
+    report["rollback_exact_cache_only"] = json!(true);
+    report["rollback_fresh_authority"] = json!(true);
+    report["rollback_pointer_reversed"] = json!(true);
+    report["rollback_source_unchanged"] = json!(true);
+    report["rollback_restart_cached"] = json!(true);
+    report["recovery_purge_pending"] = json!(true);
+    report["recovery_incomplete_uninstall"] = json!(true);
+    report["recovery_project_revision_once"] = json!(true);
+    Ok(report)
+}
+
+async fn smoke_extension_runtime(
+    session: Arc<ArkSession>,
+    context: Arc<Mutex<CoordinatorRuntime>>,
+    store_path: &Path,
+    project_root: &Path,
+) -> Result<Value> {
+    let diagnostics: Arc<dyn DiagnosticSink> = Arc::new(|_: ExtensionDiagnostic| {});
+    let mode_value = match std::env::var("RHO_INTERNAL_EXTENSION_RUNTIME") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => Some("invalid_non_unicode".to_string()),
+    };
+    let mode = InternalExtensionRuntimeMode::parse(mode_value.as_deref(), diagnostics.as_ref());
+    let host_capabilities = vec![
+        CapabilityDeclaration::new(runs_broker_capability_id(), 1),
+        CapabilityDeclaration::new(workspace_probe_broker_capability_id(), 1),
+    ];
+    let canonical_project_root = project_root.canonicalize()?;
+    std::fs::write(
+        canonical_project_root.join("rho-extension-smoke.html"),
+        "<!doctype html><title>Rho extension smoke</title>",
+    )?;
+    let direct_viewer = read_viewer_file(&canonical_project_root, "rho-extension-smoke.html")?;
+    ensure!(
+        direct_viewer.contract == "rho.viewer_file.v1" && direct_viewer.media_type == "text/html",
+        "direct project file viewer smoke failed"
+    );
+
+    if mode == InternalExtensionRuntimeMode::Legacy {
+        let host = ExtensionHost::new_with_host_capabilities(
+            mode,
+            host_capabilities,
+            diagnostics,
+            LifecycleDeadlines::default(),
+        )?;
+        ensure!(
+            host.scopes()
+                .application()
+                .registry()
+                .resolve_project_file_viewer(&project_file_viewer_capability_id())
+                .is_err(),
+            "legacy smoke unexpectedly activated the project file viewer plugin"
+        );
+        let shutdown = host.shutdown().await;
+        ensure!(
+            shutdown.outcome == DisposeOutcome::Disposed,
+            "legacy extension host did not shut down cleanly"
+        );
+        return Ok(json!({
+            "mode": "legacy",
+            "candidate_exercised": false,
+            "legacy_override_exercised": true,
+            "direct_viewer": true,
+            "clean_shutdown": true,
+        }));
+    }
+
+    let host = Arc::new(
+        ExtensionHost::new_with_application_plugins(
+            mode,
+            host_capabilities,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::application_kind()),
+            Arc::new(rho_extension_runtime::RejectingBrokerFacade),
+            diagnostics,
+            LifecycleDeadlines::default(),
+        )
+        .await?,
+    );
+    let application = host.scopes().application();
+    let viewer = application
+        .registry()
+        .resolve_project_file_viewer(&project_file_viewer_capability_id())?;
+    ensure!(
+        viewer
+            .contribution()
+            .supported_media_types()
+            .iter()
+            .any(|value| value == direct_viewer.media_type),
+        "candidate viewer contribution omitted HTML"
+    );
+    drop(viewer);
+
+    let normalized_project_root =
+        normalize_project_root(canonical_project_root.to_string_lossy().as_ref());
+    let project = host
+        .build_project_candidate(
+            extension_project_scope_id(&normalized_project_root)?,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::project_kind()),
+            Arc::new(RunHistoryBrokerFacade {
+                store_path: store_path.to_path_buf(),
+                project_root: normalized_project_root.clone(),
+            }),
+        )
+        .await?;
+    host.publish_project_candidate(None, project.clone())
+        .await?;
+    let workspace_identity = context.lock().await.broker.identity().clone();
+    let workspace = host
+        .build_workspace_candidate(
+            &project,
+            extension_workspace_scope_id(&project, &workspace_identity)?,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::workspace_kind()),
+            Arc::new(WorkspaceSnapshotBrokerFacade {
+                session: Arc::clone(&session),
+                context: Arc::clone(&context),
+            }),
+        )
+        .await?;
+    host.publish_workspace_candidate(None, workspace.clone())
+        .await?;
+
+    let snapshot_request =
+        BoundedJson::generic(serde_json::to_value(WorkspaceOperation::Snapshot {
+            expected_workspace: expected_workspace(&workspace_identity),
+            origin: ExecutionOrigin::System,
+            execution_id: None,
+        })?)?;
+    let snapshot = workspace
+        .registry()
+        .call_workspace_tool(&workspace_snapshot_tool_capability_id(), snapshot_request)
+        .await?;
+    host.scopes().validate_workspace_current(&snapshot.scope)?;
+    let snapshot_value = snapshot.payload.into_value();
+    ensure!(
+        snapshot_value["workspace"]["kernel_instance_id"] == workspace_identity.kernel_instance_id,
+        "candidate Workspace Snapshot returned a different kernel identity"
+    );
+
+    let run_request = BoundedJson::generic(json!({ "limit": null }))?;
+    let candidate_runs = project
+        .registry()
+        .call_source(&run_history_source_capability_id(), run_request)
+        .await?;
+    host.scopes()
+        .validate_project_current(&candidate_runs.scope)?;
+    let candidate_runs: Vec<RunSummary> =
+        serde_json::from_value(candidate_runs.payload.into_value())?;
+    let direct_runs = context
+        .lock()
+        .await
+        .store
+        .list_runs(&normalized_project_root, None)?;
+    ensure!(
+        serde_json::to_value(&candidate_runs)? == serde_json::to_value(&direct_runs)?,
+        "candidate Run History diverged from Store authority"
+    );
+
+    let replacement = host
+        .build_workspace_candidate(
+            &project,
+            extension_workspace_scope_id(&project, &workspace_identity)?,
+            internal_plugins_for_scope(&rho_extension_runtime::ScopePolicy::workspace_kind()),
+            Arc::new(WorkspaceSnapshotBrokerFacade {
+                session,
+                context: Arc::clone(&context),
+            }),
+        )
+        .await?;
+    host.publish_workspace_candidate(Some(workspace.clone()), replacement)
+        .await?;
+    ensure!(
+        workspace
+            .registry()
+            .call_workspace_tool(
+                &workspace_snapshot_tool_capability_id(),
+                BoundedJson::generic(json!({}))?,
+            )
+            .await
+            .is_err(),
+        "old Workspace extension generation remained routable"
+    );
+    let shutdown = host.shutdown().await;
+    ensure!(
+        shutdown.outcome == DisposeOutcome::Disposed,
+        "candidate extension host did not shut down cleanly"
+    );
+    Ok(json!({
+        "mode": "candidate",
+        "candidate_exercised": true,
+        "legacy_override_exercised": false,
+        "run_history_parity": true,
+        "workspace_snapshot_typed": true,
+        "viewer_host_injected": true,
+        "old_workspace_rejected": true,
+        "clean_shutdown": true,
+    }))
 }
 
 async fn set_smoke_project_root(
@@ -11014,6 +15464,14 @@ async fn set_smoke_project_root(
 }
 
 fn main() {
+    // On Linux, WebKitGTK's DMABUF renderer fails to allocate GBM buffers on
+    // NVIDIA proprietary graphics stacks, leaving the webview blank. Default
+    // to the software renderer unless the environment already overrides it.
+    if cfg!(target_os = "linux") && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: this runs at the top of main() before any additional
+        // threads are spawned, so no concurrent environment access exists.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
     std::panic::set_hook(Box::new(|information| {
         write_startup_log(&format!("Rho desktop panic: {information}"));
     }));
@@ -11033,6 +15491,7 @@ fn main() {
         }
     }
     let run_result = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -11046,6 +15505,11 @@ fn main() {
                 error
             })?;
             let selected_rscript = load_selected_rscript(&data_dir);
+            let extension_host =
+                tauri::async_runtime::block_on(desktop_extension_host()).map_err(|error| {
+                    write_startup_log(&format!("Internal extension host setup failed: {error:#}"));
+                    error
+                })?;
             app.manage(AppState {
                 data_dir,
                 ark,
@@ -11065,6 +15529,9 @@ fn main() {
                 approvals: Arc::new(PendingApprovalRegistry::default()),
                 environment_approvals: Arc::new(PendingApprovalRegistry::default()),
                 project_transition_gate: Arc::new(Mutex::new(())),
+                extension_host,
+                plugin_permissions: crate::workspace_plugins::PendingPluginPermissionRegistry::new(
+                ),
                 agent_tasks: Arc::new(Mutex::new(HashMap::new())),
                 agent_workspace_lane: Arc::new(AgentWorkspaceLane::default()),
                 agent_file_mutations: Arc::new(AgentFileMutationRegistry::default()),
@@ -11076,11 +15543,20 @@ fn main() {
                 render_jobs: Arc::new(Mutex::new(HashMap::new())),
                 render_tasks: Arc::new(Mutex::new(HashMap::new())),
             });
+            app.manage(NativeUpdaterState {
+                operation_gate: Mutex::new(()),
+                pending: Mutex::new(None),
+            });
+            let heartbeat_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                monitor_workspace_plugin_heartbeats(heartbeat_app).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
             check_for_updates,
+            install_native_update,
             open_rho_website,
             show_rho_license,
             startup_status,
@@ -11119,7 +15595,25 @@ fn main() {
             respond_environment_operation,
             list_installed_packages,
             list_lockfile_packages,
-            list_runs,
+            commands::plugins::list_workspace_plugins,
+            commands::plugins::get_workspace_plugin_transition,
+            commands::plugins::request_workspace_plugin_enable,
+            commands::plugins::disable_workspace_plugin,
+            commands::plugins::retry_workspace_plugin,
+            commands::plugins::accept_workspace_plugin_update,
+            commands::plugins::rollback_workspace_plugin,
+            commands::plugins::uninstall_workspace_plugin,
+            commands::plugins::restore_workspace_plugin,
+            commands::plugins::list_plugin_permission_requests,
+            commands::plugins::get_plugin_permission_request,
+            commands::plugins::respond_plugin_permission,
+            commands::plugins::list_plugin_grants,
+            commands::plugins::revoke_plugin_grant,
+            commands::plugins::list_plugin_contributions,
+            commands::plugins::invoke_plugin_command,
+            commands::plugins::open_plugin_viewer,
+            commands::plugins::get_plugin_panel_document,
+            commands::runs::list_runs,
             list_plot_artifacts,
             export_plot_artifact,
             export_data_view_artifact,
@@ -11130,10 +15624,10 @@ fn main() {
             list_project_skills,
             clear_artifact_records,
             clear_plot_artifacts,
-            list_problems,
-            get_run_detail,
-            compare_runs,
-            audit_reproducibility,
+            commands::runs::list_problems,
+            commands::runs::get_run_detail,
+            commands::runs::compare_runs,
+            commands::runs::audit_reproducibility,
             editor_package_functions,
             editor_function_help,
             editor_function_documentation,

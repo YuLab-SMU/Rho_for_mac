@@ -41,9 +41,16 @@ It requires:
   or NVIDIA.
 
 Listed Apple Silicon macOS packages use Developer ID signing and notarization.
-Current Windows downloads are not Authenticode-signed and must not be treated
-as public-release-ready merely because a checksum is available. Unsigned local
-builds are for development review only. See the
+Windows trust status is recorded per release. The published `0.4.0-dev.24`
+Windows package is unsigned; selected development prereleases may carry a
+SignPath Free Trial self-signed test signature only after their exact evidence
+passes. Starting with the fresh dev.42 candidate contract, both the Rho
+executable and outer NSIS installer must be signed and the installed executable
+must be verified. That test certificate is not publicly trusted or a SignPath Foundation production
+publisher, and Windows or SmartScreen may still warn. A Release page also
+identifies any conditional human-acceptance limitations; conditional builds are
+for evaluation, not stable or production-ready use. Unsigned local builds are
+for development review only. Verify the release SHA-256 and see the
 [Windows prototype guide](docs/implementation/implemented-windows-prototype.md)
 and the [macOS support specification](docs/plans/active-2026-08-05-macos-arm64-support-spec.md)
 for platform-specific status and prerequisites.
@@ -83,17 +90,16 @@ implementation, project, bug-fix, and release documents.
 
 ## Project Status
 
-Rho is under active development. Windows packaging, Apple Silicon macOS
-packaging, and the core project workflow are implemented; installed-candidate
-acceptance, release signing/publication, macOS x64, and Linux packaging remain
-in progress.
+Rho is under active development. Windows x64, Apple Silicon macOS, and Linux
+x86-64 packaging are implemented; macOS x64 remains in progress.
 
 ## Security, Privacy, And Signing
 
-Rho does not perform automatic update checks or first-party background
-telemetry. Network-capable operations follow an explicit user action, such as
-checking for updates, connecting a model Provider, resolving a DOI, operating
-on a package environment, or running user/approved code. Review the complete
+Rho checks its fixed signed-update endpoint once after local startup becomes
+ready. It performs no first-party background telemetry. Other network-capable
+operations follow an explicit user action, such as connecting a model Provider,
+resolving a DOI, operating on a package environment, or running user/approved
+code. Review the complete
 [Privacy policy](PRIVACY.md), especially before configuring a custom Base URL
 or sharing diagnostics.
 

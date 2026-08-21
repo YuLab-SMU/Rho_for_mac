@@ -4,6 +4,371 @@ This file records user-visible changes by release. It is intentionally
 separate from the architecture plan: the plan describes intended work, while
 this file records behavior included in a versioned build candidate.
 
+## 0.4.1-dev.11 - 2026-08-21
+
+### Workspace-plugin crash-point recovery truth
+
+- Startup, Workspace restart, project switch, and failed-switch restoration now
+  reconcile incomplete plugin Uninstall moves, purge-pending trash, and
+  interrupted Update/Rollback transitions before ordinary activation. Exact
+  source/trash/cache evidence is replayed idempotently; ambiguous ownership
+  remains non-routable.
+- File-moving recovery advances and persists project revision exactly once, then
+  repeats reconciliation against the fresh identity. One failed plugin cannot
+  block Workspace R, another plugin, or another project.
+- Unprovable lifecycle state is shown as Recovery required with no unsafe action
+  and no completion claim. A read-only transition inspection command exposes
+  only bounded stable IDs, phases, digests, timestamps, and reason codes.
+
+## 0.4.1-dev.10 - 2026-08-21
+
+### Exact cached workspace-plugin Rollback
+
+- Enabled plugins with a durable rollback pointer now expose one trusted
+  Roll back review action bound to the current project revision and exact
+  current/target digests. The target is loaded only from the verified immutable
+  cache for that same project and plugin.
+- Rollback always creates a new generation, host, and handles. Every target
+  permission is reviewed again even if that digest was previously accepted;
+  historical grants and live authority are never restored.
+- Successful Rollback atomically reverses accepted/rollback pointers through
+  expected-old CAS. The newer project package remains unchanged and visible as
+  an Update candidate. Restart reconstructs the accepted cached target only
+  when the durable pointer pair exactly proves this state.
+
+## 0.4.1-dev.9 - 2026-08-21
+
+### Exact local workspace-plugin Update
+
+- Update pending plugins now expose a trusted review action bound to the
+  current project revision, accepted digest, and changed local candidate digest.
+  This action does not download code or claim marketplace, publisher, signature,
+  or automatic-update trust.
+- Rho validates and caches the complete candidate, obtains fresh permissions
+  for its new digest, creates a hidden fresh host/generation/handles, and swaps
+  contribution routing only through expected-old CAS. Candidate failure or
+  denial preserves the accepted old route when safe.
+- Durable completion atomically advances accepted and rollback pointers before
+  old-digest grants are revoked. A post-CAS persistence failure closes both old
+  and candidate authority and leaves recoverable transition truth instead of
+  reporting a successful Update.
+
+## 0.4.1-dev.8 - 2026-08-21
+
+### Workspace-plugin recoverable Uninstall
+
+- The trusted Workspace Plugins surface can now confirm an exact project,
+  directory, accepted package digest, and project revision before Uninstall.
+  Rho first completes plugin teardown, cancels pending permission requests,
+  revokes every durable grant for that exact digest, and then atomically moves
+  the package directory from discovery into project-local recoverable trash.
+- Package ownership, the recoverable tombstone, and durable Uninstalled state
+  are journaled without claiming permanent deletion. If terminal persistence
+  fails after the move, the package remains in trash and the nonterminal
+  transition stays recoverable; the UI does not report success.
+- Restore requires the exact current-project tombstone and revision, rejects
+  source collisions and any surviving authority, and returns the package in
+  Disabled state. It never recreates a host, route, handle, permission request,
+  or durable grant.
+
+## 0.4.1-dev.7 - 2026-08-20
+
+### Workspace-plugin crash recovery
+
+- Guest traps, invalid outputs, fuel/epoch failures, heartbeat timeouts, and
+  unexpected host loss now remove the exact route and live handles before Rho
+  records durable Crashed state. The third exact-project/plugin crash within
+  ten minutes becomes Blocked, preventing a restart loop.
+- Crashed plugins expose one trusted Retry action. Retry requires the unchanged
+  accepted source/cache digest and current grants, allocates a higher generation
+  and fresh host/handles, and returns to permission review when grants are no
+  longer reusable. Blocked, changed, disabled, missing, and foreign plugins
+  cannot use Retry.
+
+## 0.4.1-dev.6 - 2026-08-20
+
+### Workspace-plugin disable
+
+- The trusted Workspace Plugins surface can now explicitly disable an enabled
+  plugin with the current project revision. Rho persists disabled intent before
+  closing contribution routes, then cancels the exact yielded guest call and
+  pending permission requests, revokes live handles, disposes contributions,
+  and drops or quarantines the Wasm host.
+- Teardown continues after guest quiesce/dispose errors and reports only stable
+  diagnostic codes. Enabled is never shown after route closure. If lifecycle
+  persistence fails during cleanup, the result is `completion_uncertain`, the
+  plugin remains non-routable, and recovery retains the monotonic transition
+  rather than manufacturing durable completion.
+- Workspace R restart, project switching, failed-switch restoration, and
+  application shutdown now reuse the same bounded teardown per plugin. These
+  system boundaries preserve durable enabled intent while recording stopped
+  runtime truth, so returning to an exact project reconstructs fresh authority;
+  a failed plugin teardown is forcibly made non-routable and cannot block the
+  project or application lifecycle.
+
+## 0.4.1-dev.5 - 2026-08-20
+
+### Durable workspace-plugin enablement
+
+- Explicit first enable now persists project/plugin desired and observed state,
+  an exact transition journal, bounded lifecycle events, and a monotonic
+  activation generation in SQLite. The UI reports Enabled only after the exact
+  accepted digest and active terminal state commit.
+- Before host construction, Rho copies the fully revalidated package into a
+  project-isolated app-local immutable cache using exclusive writes, sync,
+  atomic rename, and complete digest read-back. Wasm and Skill text are loaded
+  from that exact cache snapshot rather than mutable project files.
+- Permission review retains the same transition identity through activation.
+  If persistence fails after contribution publication, Rho closes the route,
+  revokes live handles, reports failure, and leaves nonterminal recovery truth;
+  it does not claim durable completion. Changed packages remain update-pending
+  and cannot use the first-enable path as an unreviewed upgrade.
+- Application start, Workspace R restart, and successful project switching now
+  reconcile durable enabled plugins without blocking the scientific workspace.
+  Exact accepted packages with valid project grants receive fresh hosts,
+  generations, and handles; one-shot grants return to permission review.
+  Interrupted enable transitions are closed and rebuilt from exact evidence,
+  while missing, changed, corrupt, denied, crashed, or otherwise unprovable
+  packages stay visibly non-routable as Blocked or Update pending.
+
+## 0.4.1-dev.4 - 2026-08-20
+
+### Controlled workspace-plugin contributions
+
+- Manifest V2 packages can declare bounded Tool, Source, Skill, Command,
+  Viewer, and named Panel contracts. Labels, schemas, assets, media types, and
+  project/package limits are validated before any declaration can become live.
+- Contribution proxies are published transactionally against the exact prior
+  project/plugin/digest/generation/host identity. A failed or stale candidate
+  leaves the previously accepted generation routable and project switching
+  removes the exact live routes.
+- Calls use the no-import Guest ABI V2 loop with a 30-second deadline, exact
+  call-bound handles, closed input/output schemas, bounded results, and
+  provenance. Active Tool contributions are projected into the exact-project
+  Agent tool set; Source results and declarative Skills enter Agent context as
+  explicitly untrusted, origin-labelled project content. The trusted Workspace
+  Plugins surface can explicitly run zero-input Commands and open Viewers using
+  fixed Text/Code/KeyValue/Table/Notice/Artifact-image blocks; plugin HTML,
+  URLs, scripts, styles, paths, and base64 documents are rejected. Optional
+  Panels use the same renderer only inside the named `plugin_details` slot and
+  are cleared on close, revoke, host teardown, or project change.
+
+## 0.4.1-dev.3 - 2026-08-20
+
+### Workspace plugins
+
+- Project-local Wasm packages under `.rho/plugins` now appear in a dedicated
+  Workspace Plugins surface and remain disabled until explicitly enabled.
+- Permission-bearing plugins use a separate trusted dialog and durable
+  request/grant/event lane. Decisions bind the exact project, plugin version,
+  package digest, permission constraints, policy revision, host generation,
+  and Workspace lineage where applicable; raw session handles are never shown
+  or persisted.
+- The initial permission choices are Deny, Allow once, and bounded access for
+  this project. One-shot grants are revoked during restart recovery, upgrades
+  require review, and project switching invalidates in-memory authority.
+- The bounded `project.fs.read` broker lane is implemented behind the no-import
+  Guest ABI V2 loop. Workspace R metadata/preview inspection is also
+  implemented through fixed object references and strips function source, but
+  no user-facing contribution routes either operation yet. Network access is
+  likewise implemented as credential-free, public-HTTPS-only GET/HEAD with
+  per-hop DNS and grant revalidation, but remains unreachable until the
+  controlled contribution slice lands.
+
+## 0.4.1-dev.1 - 2026-08-18
+
+### Credentials
+
+- macOS startup and ordinary Model settings projection no longer read every
+  Provider API key. Keychain access is deferred to the exact Provider used by
+  an Agent turn, model test, model discovery, or explicit credential action,
+  preventing one authorization dialog per configured Provider.
+- The first successful use of a Provider keeps its key only in a zeroizing
+  process-session cache, so later conversations do not ask Keychain again.
+  Replacement, deletion, refresh, and graceful shutdown clear the entry;
+  secrets remain absent from settings, browser storage, logs, and diagnostics.
+
+### Agent reliability
+
+- Provider failures now retain and display a bounded redacted cause, including
+  actionable HTTP 401/403, 404, 429, and 5xx guidance instead of a bare
+  `Failed` state.
+- Invalid file proposals such as `replace_selection` without a captured
+  selection are labelled before review and cannot be accepted. Valid proposals
+  wait until their parent Agent turn is terminal, while true file changes keep
+  their separate stale-file recovery message.
+
+## 0.4.1-dev.0 - 2026-08-18
+
+### Internal extension runtime
+
+- Rho now uses its compiled-in Phase 1 extension runtime by default for Run
+  History, Workspace Snapshot, and Project File Viewer composition while
+  preserving the existing commands, Agent tool, data authorities, and viewer
+  protocol.
+- A private `RHO_INTERNAL_EXTENSION_RUNTIME=legacy` override remains available
+  for one development release cycle. This is an internal first-party runtime,
+  not a public plugin SDK or third-party loading interface.
+
+## 0.4.0 - 2026-08-17
+
+### Stable release
+
+- Rho 0.4.0 is the first stable three-platform release for Windows x64, macOS
+  Apple Silicon, and Linux x86-64.
+- Signed automatic updates start after the local workbench is ready and use
+  distinct stable/development manifests with transactional recovery.
+- Stable download and updater manifests bind all platform URLs, hashes,
+  signatures, and candidate evidence to one protected source commit.
+- Windows packages retain the SignPath Free Trial self-signed test certificate;
+  it is not publicly trusted and Windows or SmartScreen may still warn.
+
+## 0.4.0-dev.43 - 2026-08-17
+
+### Updates
+
+- Signed automatic updates now cover Windows x64, macOS Apple Silicon, and
+  Linux x86-64 AppImage builds.
+- Update discovery begins only after local startup is ready; verified updates
+  install and restart automatically, while failure preserves the current app.
+- Development Releases and the download page now carry all three platform
+  packages, checksums, evidence, and updater signatures.
+
+## 0.4.0-dev.42 - 2026-08-17
+
+### Distribution
+
+- Windows candidate packaging now Authenticode-signs the application
+  executable before NSIS bundling, verifies that bundling preserves those
+  exact bytes, then signs the outer installer in a separate SignPath request.
+- Candidate evidence now binds both requests and verifies that a silent test
+  installation contains the exact signed executable, passes smoke testing,
+  and can be uninstalled without leftover executable or registry state.
+- Development prereleases continue to use the SignPath Free Trial self-signed
+  certificate. It is not publicly trusted and Windows or SmartScreen may warn;
+  this does not claim SignPath Foundation acceptance.
+
+## 0.4.0-dev.41 - 2026-08-15
+
+### Verification
+
+- `dev.41` is an acceptance-only native-updater target for a controlled
+  Windows/macOS `dev.40 -> dev.41` test. It is explicitly excluded from the
+  normal Update Site and does not publish or enable `dev.40` native updates.
+- The target transport binds the immutable source Draft and final target
+  signatures to one marker, permits only a time-bounded test manifest, and
+  requires exact cleanup before normal Pages publication can continue.
+
+## 0.4.0-dev.40 - 2026-08-15
+
+### Updates
+
+- Help > Check for Updates now uses Tauri's native signed-updater boundary on
+  Windows x64 and macOS Apple Silicon. It is manual-only; a separately labelled
+  **Install and Restart** action is required before any update bytes download.
+- Candidate packaging now signs the final Authenticode Windows installer and a
+  final notarized/stapled macOS application archive after their byte-changing
+  platform steps. Evidence binds both signatures to the exact release assets.
+- The legacy V1 download-site manifest remains compatible and separate from
+  the native Tauri manifest. No public native-update manifest or candidate has
+  been declared available until its exact candidate and installed-app gates
+  pass.
+
+## 0.4.0-dev.39 - 2026-08-13
+
+### Distribution
+
+- Public development candidates can now carry an actor-bound, exact-candidate
+  `CONDITIONAL_GO` decision without misreporting incomplete human checks as
+  passed. The bounded `dev.39` decision records Windows human installation and
+  enabled-Gatekeeper macOS human launch as not run.
+- Conditional status and evaluation-only scope are visible in reviewed Release
+  notes and on the download site. Candidate construction, signatures,
+  notarization, hashes, log privacy, and protected publication checks remain
+  mandatory.
+- The update-site pipeline now downloads and validates each candidate's
+  acceptance asset before projecting the Release or update manifest.
+
+R package versions and installed application behavior are unchanged from
+`0.4.0-dev.38`; the fresh identity is required because release acceptance and
+public presentation semantics change.
+
+## 0.4.0-dev.38 - 2026-08-13
+
+### Distribution
+
+- Candidate-mode Windows packaging now submits the final NSIS installer to the
+  SignPath Free Trial test policy only after complete build and smoke checks,
+  verifies the expected self-signed certificate and changed bytes, and binds
+  the final post-sign hash and request facts into platform evidence.
+- The Free Trial signature is explicitly test-only and not publicly trusted;
+  it does not establish SignPath Foundation acceptance, a production publisher,
+  or SmartScreen reputation. Release notes and the download page show this
+  limitation with the exact release instead of applying one blanket Windows
+  trust claim.
+- GitHub Release bodies now come from reviewed per-tag Markdown in the exact
+  candidate commit and are protected against body drift during publication.
+
+R package versions and installed application behavior are unchanged from the
+accepted `0.4.0-dev.37` source; this fresh identity is required because the
+public installer bytes, evidence, release metadata, and trust presentation
+change.
+
+## 0.4.0-dev.37 - 2026-08-12
+
+### Verification
+
+- Exact installed-Windows Issue #33 acceptance now proves a project-watcher
+  refresh through the reloaded contents of a clean background document and a
+  higher project revision before checking that Monaco preserves the active
+  document, viewport, and cursor. It no longer waits on the unrelated project
+  hydration sequence, which real watcher refresh does not change.
+
+This fresh identity replaces the rejected `0.4.0-dev.36` internal package; its
+five passing original scenarios and cleanup evidence remain historical and are
+not composed into the new acceptance result.
+
+## 0.4.0-dev.36 - 2026-08-12
+
+### Verification
+
+- The internal installed-Windows Issue #33 workflow now supplies its loopback
+  WebView2 debugging arguments through a Tauri build-only configuration
+  overlay, matching Wry's explicit environment construction. Normal candidate
+  builds do not use the overlay and remain free of remote-debugging arguments.
+
+This identity carries forward the unchanged Issue #33 product repairs from the
+rejected `0.4.0-dev.35` internal review package.
+
+## 0.4.0-dev.35 - 2026-08-12
+
+### Verification
+
+- Exact installed-Windows acceptance now normalizes the quoted installation
+  directory written by the NSIS registry entry before resolving or cleaning up
+  installed files. Malformed or non-absolute registry paths still fail closed.
+
+This identity carries forward the unchanged Issue #33 product repairs from the
+rejected `0.4.0-dev.34` internal review package.
+
+## 0.4.0-dev.34 - 2026-08-12
+
+### Fixed
+
+- Background project-watcher refreshes no longer reveal the saved Monaco
+  cursor or selection, so a user reading an earlier part of a source file keeps
+  the same viewport until an explicit navigation action.
+- Agent file-proposal updates preserve the reviewer's expanded Before/After
+  reading position instead of returning the proposal surface to its top.
+
+### Verification
+
+- A dedicated clean-profile Windows workflow installs the exact-source NSIS
+  package and repeats Issue #33's focus, activation, Console reading-position,
+  external-reload, automatic-edit, and Monaco viewport scenarios. This is
+  product-defect evidence only and does not claim Windows signing or release
+  acceptance.
+
 ## 0.4.0-dev.33 - 2026-08-11
 
 ### Fixed

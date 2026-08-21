@@ -87,7 +87,7 @@ assert.match(candidate, /export function validatePublishedPlatformEvidence/);
 const updateSite = read("scripts/generate-update-site.mjs");
 assert.match(updateSite, /validatePublishedPlatformEvidence\(supplied\.content/);
 assert.match(updateSite, /fakeCandidateRecord\("0\.4\.0-dev\.24"\)/);
-assert.match(updateSite, /fakeCandidateRecord\("0\.4\.0-dev\.33"\)/);
+assert.match(updateSite, /fakeCandidateRecord\("0\.4\.0-dev\.34"\)/);
 assert.match(updateSite, /fakeCandidateRecord\("0\.4\.0-dev\.23"\)/);
 for (const strictConsumer of [
   ".github/workflows/candidate-build-draft.yml",
@@ -97,7 +97,7 @@ for (const strictConsumer of [
 }
 
 const sourceCi = read(".github/workflows/rust-compatibility.yml");
-assert.match(sourceCi, /- name: Verify installed license surface\s+if: matrix\.toolchain == 'stable'\s+run: \|\s+node scripts\/test-installed-license-surface\.mjs\s+node scripts\/generate-update-site\.mjs --test true/);
+assert.match(sourceCi, /- name: Verify installed license surface\s+if: matrix\.lane == 'source' && matrix\.toolchain == 'stable'\s+run: \|\s+node scripts\/test-installed-license-surface\.mjs\s+node scripts\/generate-update-site\.mjs --test true/);
 assert.equal(
   [...sourceCi.matchAll(/- "scripts\/test-installed-license-surface\.mjs"/g)].length,
   2,

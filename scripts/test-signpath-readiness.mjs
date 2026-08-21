@@ -17,10 +17,16 @@ function snapshot() {
     frontend: read("desktop/dist/app.js"),
     html: read("desktop/dist/index.html"),
     updateBackend: read("desktop/src-tauri/src/update.rs"),
+    desktopBackend: read("desktop/src-tauri/src/main.rs"),
+    tauriConfig: read("desktop/src-tauri/tauri.conf.json"),
+    windowsTauriConfig: read("desktop/src-tauri/tauri.windows.conf.json"),
+    macosTauriConfig: read("desktop/src-tauri/tauri.macos.conf.json"),
+    linuxTauriConfig: read("desktop/src-tauri/tauri.linux.conf.json"),
     updateDesign: read("docs/design/accepted-2026-07-25-about-and-update-check-design.md"),
     docsIndex: read("docs/README.md"),
     activeSpec: read("docs/plans/active-2026-08-11-signpath-application-readiness-spec.md"),
-    checklist: read("docs/release/active-0.4.0-dev.33-candidate-checklist.md"),
+    autoSpec: read("docs/plans/implemented-2026-08-17-three-platform-automatic-updater-dev43-spec.md"),
+    checklist: read("docs/release/historical-0.4.0-dev.39-candidate-checklist.md"),
     news: read("NEWS.md"),
     generator: read("scripts/generate-update-site.mjs"),
     compatibilityWorkflow: read(".github/workflows/rust-compatibility.yml"),
@@ -34,7 +40,7 @@ function occurrences(value, pattern) {
 function validate(value) {
   assert.match(value.privacy, /^# Rho Privacy Policy$/m, "PRIVACY.md must be the canonical privacy policy");
   assert.match(value.privacy, /does not include first-party\s+analytics, advertising, background telemetry, or automatic crash-report upload/i);
-  assert.match(value.privacy, /only after you choose\s+\*\*Help > Check for Updates\.\.\.\*\*/);
+  assert.match(value.privacy, /After local startup becomes ready, Rho automatically contacts the fixed Rho\s+update service once/);
   assert.match(value.privacy, /operating system\s+credential store/i);
   assert.match(value.privacy, /custom Base URL/i);
   assert.match(value.privacy, /Crossref/i);
@@ -43,12 +49,16 @@ function validate(value) {
 
   assert.match(value.signing, /^# Rho Code Signing Policy$/m);
   assert.match(value.signing, /Free code signing provided by \[SignPath\.io\]\(https:\/\/about\.signpath\.io\),\s+certificate by \[SignPath Foundation\]\(https:\/\/signpath\.org\)/);
-  assert.match(value.signing, /Windows downloads are currently not Authenticode-signed/i);
+  assert.match(value.signing, /published `0\.4\.0-dev\.24` Windows download[\s\S]{0,160}not Authenticode-signed/i);
+  assert.match(value.signing, /SignPath Free Trial self-signed test certificate/i);
+  assert.match(value.signing, /not\s+publicly trusted/i);
+  assert.match(value.signing, /does not establish SignPath Foundation acceptance/i);
+  assert.match(value.signing, /expected untrusted `UnknownError` status/i);
   assert.doesNotMatch(value.signing, /Windows downloads are Authenticode-signed/i, "unsigned Windows status must not be overstated");
   assert.match(value.signing, /rho-desktop\.exe/);
   assert.match(value.signing, /NSIS/i);
   for (const excluded of ["Ark", "Jet", "WebView2Loader"]) assert.match(value.signing, new RegExp(excluded));
-  assert.match(value.signing, /manual approval[^.]*every signing request/i);
+  assert.match(value.signing, /production policy requires manual approval[^.]*every production\s+signing request/i);
   assert.match(value.signing, /Authors and Reviewers[\s\S]{0,180}organization members/i);
   assert.match(value.signing, /Approvers[\s\S]{0,180}organization owners/i);
   assert.match(value.signing, /multi-factor authentication\s+\(MFA\)/i);
@@ -69,52 +79,84 @@ function validate(value) {
     "/SECURITY.md",
     "/scripts/candidate-release.mjs",
     "/scripts/generate-update-site.mjs",
+    "/scripts/test-signpath-candidate-workflow.mjs",
+    "/docs/plans/active-2026-08-13-dev38-test-signed-prerelease-spec.md",
+    "/docs/plans/implemented-2026-08-13-conditional-prerelease-policy-spec.md",
   ]) assert.match(value.owners, new RegExp(protectedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   for (const link of ["PRIVACY.md", "SECURITY.md", "CODE_SIGNING_POLICY.md", "LICENSE"]) {
     assert.match(value.readme, new RegExp(`\\]\\(${link.replace(".", "\\.")}\\)`), `README must link ${link}`);
   }
   assert.match(value.readme, /Code signing policy/);
-  assert.match(value.readme, /does not perform automatic update checks/i);
+  assert.match(value.readme, /Windows trust status is recorded per release/);
+  assert.match(value.readme, /Free Trial self-signed test signature/);
+  assert.match(value.readme, /not publicly trusted or a SignPath Foundation production/);
+  assert.match(value.readme, /checks its fixed signed-update endpoint once after local startup/i);
   assert.match(value.readme, /^## Uninstallation$/m);
   assert.match(value.readme, /Settings > Apps > Installed apps/);
   assert.match(value.readme, /move \*\*Rho\.app\*\* from \*\*Applications\*\* to the\s+Trash/i);
   assert.match(value.readme, /Uninstalling the application does not automatically delete project files/i);
 
   assert.match(value.html, /data-menu-command="check-updates"/);
+  assert.match(value.html, /id="updateInstall"[^>]*>Install and Restart/);
   assert.match(value.frontend, /"check-updates": \(\) => openUpdateDialog\(\)/);
   assert.match(value.frontend, /function openUpdateDialog\(\) \{\s*(?:void )?checkForUpdates\(\);\s*\}/);
   assert.match(value.frontend, /\$\("#updateRetry"\)\.addEventListener\("click", \(\) => checkForUpdates\(\)\)/);
-  assert.equal(occurrences(value.frontend, /invoke\("check_for_updates"\)/g), 1, "one manual frontend path must own update invocation");
-  assert.doesNotMatch(value.frontend, /maybeCheckForUpdates/);
+  assert.match(value.frontend, /function installNativeUpdate\(\)/);
+  assert.match(value.frontend, /invoke\("install_native_update", \{ expectedVersion \}\)/);
+  assert.match(value.frontend, /Browser preview cannot install updates/);
+  assert.match(value.frontend, /UPDATE_STALE/);
+  assert.doesNotMatch(value.frontend, /updateView/);
+  assert.equal(occurrences(value.frontend, /invoke\("check_for_updates"\)/g), 2, "manual retry and readiness-bound automatic update paths are required");
+  assert.match(value.frontend, /runAutomaticUpdateAfterStartup/);
+  assert.doesNotMatch(value.frontend, /setInterval[\s\S]{0,120}checkForUpdates/);
   assert.doesNotMatch(value.frontend, /checkForUpdates\(\{\s*background\s*:/);
   assert.doesNotMatch(value.frontend, /rho\.update\.(?:lastCheck|dismissed)/);
   assert.doesNotMatch(value.frontend, /async function checkForUpdates\([^)]*background/);
   assert.match(value.updateBackend, /pub const WEBSITE_URL: &str = "https:\/\/yulab-smu\.top\/Rho\/"/);
-  assert.match(value.updateBackend, /Duration::from_secs\(10\)/);
-  assert.match(value.updateBackend, /const MAX_MANIFEST_BYTES: u64 = 64 \* 1024/);
+  assert.match(value.updateBackend, /NATIVE_UPDATE_STABLE_ENDPOINT/);
+  assert.match(value.updateBackend, /NATIVE_UPDATE_DEVELOPMENT_ENDPOINT/);
+  assert.match(value.updateBackend, /native_updater_supported\(\)/);
+  assert.match(value.updateBackend, /normalized_native_update_notes/);
+  assert.match(value.desktopBackend, /tauri_plugin_updater::Builder::new\(\)\.build\(\)/);
+  assert.match(value.desktopBackend, /async fn install_native_update\(/);
+  assert.match(value.desktopBackend, /app\s*\.updater_builder\(\)/);
+  assert.match(value.desktopBackend, /pending_native_update_matches/);
+  const tauriConfig = JSON.parse(value.tauriConfig);
+  assert.equal(tauriConfig.plugins.updater.endpoints[0], "https://yulab-smu.top/Rho/updates/tauri/stable.json");
+  assert.match(tauriConfig.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
+  assert.equal(JSON.parse(value.windowsTauriConfig).bundle.createUpdaterArtifacts, true);
+  assert.equal(JSON.parse(value.macosTauriConfig).bundle.createUpdaterArtifacts, true);
+  assert.equal(JSON.parse(value.linuxTauriConfig).bundle.createUpdaterArtifacts, true);
 
   assert.match(value.updateDesign, /Update discovery is manual-only/i);
   assert.match(value.updateDesign, /Startup does not schedule or perform an update request/i);
+  assert.match(value.autoSpec, /checks the selected channel automatically/i);
+  assert.match(value.autoSpec, /Linux x86-64/);
   assert.doesNotMatch(value.updateDesign, /once-per-24-hours background check/i);
   assert.match(value.docsIndex, /plans\/active-2026-08-11-signpath-application-readiness-spec\.md/);
   assert.match(value.docsIndex, /design\/accepted-2026-07-25-about-and-update-check-design\.md/);
   assert.doesNotMatch(value.docsIndex, /design\/active-2026-07-25-about-and-update-check-design\.md/);
   assert.match(value.activeSpec, /Status: active; SP-READY1 repository-readiness package/);
-  assert.match(value.activeSpec, /organization-owner MFA audit,[\s\S]{0,300}remain[\s\n]+open/);
-  assert.match(value.checklist, /SP-READY1 SignPath repository readiness/);
-  assert.match(value.checklist, /owner MFA audit,[\s\S]{0,320}remain open/);
+  assert.match(value.activeSpec, /organization-owner MFA\s+audit,[\s\S]{0,360}remain\s+open/);
+  assert.match(value.checklist, /CPREL1A-CPREL1D/);
+  assert.match(value.checklist, /Windows clean-profile human installation[\s\S]{0,180}`NOT RUN`/);
+  assert.match(value.checklist, /enabled-Gatekeeper human macOS launch[\s\S]{0,120}`NOT RUN`/);
+  assert.match(value.checklist, /Free Trial self-signed test certificate/i);
+  assert.match(value.checklist, /Release decision[\s\S]{0,100}`status: conditional`[\s\S]{0,80}`decision: CONDITIONAL_GO`/i);
   assert.match(value.news, /Update checks are now user-initiated only/i);
 
   for (const constant of ["PRIVACY_POLICY", "SECURITY_POLICY", "CODE_SIGNING_POLICY", "LICENSE_URL", "SIGNPATH_IO", "SIGNPATH_FOUNDATION"]) {
     assert.match(value.generator, new RegExp(`const ${constant} =`));
   }
   assert.equal(occurrences(value.generator, />Code signing policy<\/a>/g), 3, "generated page disclosure, footer, and self-test must require Code signing policy");
-  assert.match(value.generator, /Windows downloads are currently not Authenticode-signed/);
+  assert.match(value.generator, /SignPath Free Trial self-signed test certificate/);
+  assert.match(value.generator, /not publicly trusted; Windows or SmartScreen may still warn/);
+  assert.match(value.generator, /does not establish Foundation acceptance/);
   assert.match(value.generator, /generated page omitted Code signing policy/);
-  assert.equal(occurrences(value.generator, /<h2>Windows code-signing application<\/h2>/g), 2, "generated page and its self-test must disclose the pending SignPath application");
-  assert.match(value.generator, /Rho is applying to SignPath Foundation for Windows code signing/);
-  assert.match(value.generator, /Current Windows downloads are not Authenticode-signed/);
+  assert.equal(occurrences(value.generator, /<h2>Windows code-signing status<\/h2>/g), 2, "generated page and its self-test must disclose exact Windows trust status");
+  assert.match(value.generator, /Rho is applying to SignPath Foundation for publicly trusted Windows code signing/);
+  assert.match(value.generator, /Windows trust status is shown per release/);
   assert.match(value.generator, /generated page omitted SignPath Foundation attribution link/);
   assert.equal(occurrences(value.generator, /<h2>Uninstall Rho<\/h2>/g), 2, "generated page and its self-test must require Uninstall Rho guidance");
   assert.equal(occurrences(value.generator, /Settings &gt; Apps &gt; Installed apps/g), 2, "generated page and its self-test must require Windows uninstall guidance");
@@ -133,6 +175,9 @@ function validate(value) {
     "docs/design/accepted-2026-07-25-about-and-update-check-design.md",
     "docs/README.md",
     "docs/plans/active-2026-08-11-signpath-application-readiness-spec.md",
+    "docs/plans/active-2026-08-13-dev38-test-signed-prerelease-spec.md",
+    "docs/plans/implemented-2026-08-13-conditional-prerelease-policy-spec.md",
+    "docs/release/historical-0.4.0-dev.39-candidate-checklist.md",
   ]) {
     assert.equal(occurrences(value.compatibilityWorkflow, new RegExp(`- "${trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g")), 2, `${trigger} must trigger push and PR validation`);
   }
@@ -151,9 +196,9 @@ if (process.argv.includes("--self-test")) {
   expectRejected(current, "missing attribution", (value) => {
     value.signing = value.signing.replace("Free code signing provided by [SignPath.io](https://about.signpath.io)", "Signing provider attribution unavailable");
   }, /Free code signing/);
-  expectRejected(current, "background update scheduler", (value) => {
-    value.frontend += "\nfunction maybeCheckForUpdates() { checkForUpdates({ background: true }); }\n";
-  }, /maybeCheckForUpdates/);
+  expectRejected(current, "periodic update scheduler", (value) => {
+    value.frontend += "\nsetInterval(() => checkForUpdates(), 1000);\n";
+  }, /setInterval/);
   expectRejected(current, "missing manual update entry", (value) => {
     value.frontend = value.frontend.replace('"check-updates": () => openUpdateDialog()', '"check-updates": () => {}');
   }, /check-updates/);
@@ -164,8 +209,8 @@ if (process.argv.includes("--self-test")) {
     value.generator = value.generator.replaceAll(">Code signing policy</a>", ">Signing information</a>");
   }, /Code signing policy/);
   expectRejected(current, "false Windows signing claim", (value) => {
-    value.signing = value.signing.replace("Windows downloads are currently not Authenticode-signed", "Windows downloads are Authenticode-signed");
-  }, /currently not Authenticode-signed/);
+    value.signing += "\nWindows downloads are Authenticode-signed.\n";
+  }, /unsigned Windows status must not be overstated/);
   expectRejected(current, "missing README uninstall guidance", (value) => {
     value.readme = value.readme.replace("## Uninstallation", "## Removal notes");
   }, /Uninstallation/);
@@ -173,8 +218,8 @@ if (process.argv.includes("--self-test")) {
     value.generator = value.generator.replace("<h2>Uninstall Rho</h2>", "<h2>Remove Rho</h2>");
   }, /Uninstall Rho/);
   expectRejected(current, "missing download-page SignPath disclosure", (value) => {
-    value.generator = value.generator.replace("<h2>Windows code-signing application</h2>", "<h2>Windows trust</h2>");
-  }, /pending SignPath application/);
+    value.generator = value.generator.replace("<h2>Windows code-signing status</h2>", "<h2>Windows trust</h2>");
+  }, /exact Windows trust status/);
 }
 
 process.stdout.write(`SignPath readiness contract is valid${process.argv.includes("--self-test") ? " (negative self-tests passed)" : ""}.\n`);

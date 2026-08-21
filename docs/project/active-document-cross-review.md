@@ -2,7 +2,7 @@
 
 Status: active documentation coordination record
 
-Review date: 2026-08-12
+Review date: 2026-08-20 (P2-1 Wasm host activated; TCMD/APP-SVC evidence reconciled)
 Scope: unfinished or acceptance-active specifications, plans, and release gates
 
 Manual acceptance ownership: the runnable example workflow and candidate-level
@@ -41,10 +41,27 @@ semantics.
 | --- | --- | --- | --- |
 | `project/active-development-governance.md` | active | required proposal-to-release development lifecycle, risk/test depth, review, versioning, and evidence rules | applies continuously to all non-trivial work |
 | `plans/active-2026-08-10-agpl-license-transition-spec.md` | active; LIC-1 and LIC-2 implementation, affected validation, UI/bundle review, exact-head hosted validation, and protected integration complete; exact candidate and installed distribution acceptance remain open | prospective `AGPL-3.0-only` source-license boundary, synchronized repository metadata, contribution terms, third-party exclusions, fixed installed resource copies, About legal notice, and transition gates | preserve the integrated license/resource boundary; SignPath readiness may reference but not redefine it; exact candidate and installed acceptance remain release-owned |
-| `plans/active-2026-08-11-signpath-application-readiness-spec.md` | active; SP-READY1 implementation, affected validation/review, exact-head and merged-main hosted matrices, PR #45 integration, initial public policy deployment, private reporting, and no-bypass default-branch ruleset complete; linked attribution and visible uninstall-guidance follow-up is in PR #46; owner MFA audit, external application/GitHub App, and production signing open | manual-only update admission, public privacy/security/code-signing policies, policy links and uninstall guidance, CODEOWNERS, and deterministic readiness enforcement | merge, deploy, and verify the PR #46 public-guidance follow-up; organization owner must verify signing-role MFA and configure the approved GitHub App; do not create guessed SignPath policy/workflow configuration, construct a candidate, or claim Windows signing before external identifiers and approval exist |
+| `plans/active-2026-08-11-signpath-application-readiness-spec.md` | active; SP-READY1 implementation, exact-head/main hosted matrices, PR #45/#46 integration, linked attribution, public uninstall guidance, live policy deployment, private reporting, and no-bypass default-branch ruleset complete; a real Free Trial organization/project/test policy now exists; owner MFA audit, Foundation decision, approved-project GitHub App configuration, and production signing remain open | manual-only update admission, public privacy/security/code-signing policies, policy links and uninstall guidance, CODEOWNERS, and deterministic readiness enforcement | preserve completed readiness; FT-SIGN1 may use only its isolated test lane; organization owner separately closes MFA/Foundation/production gates; do not claim Free Trial evidence as public trust or release authority |
+| `plans/active-2026-08-12-signpath-free-trial-smoke-spec.md` | active durable contract; FT-SIGN1 complete after connector rejection, dedicated least-privilege CI identity, official PowerShell/REST transport, protected configuration, exact-head matrix, clean hosted run `31675464182`, downloaded evidence reconciliation, obsolete-variable removal, and leaked-predecessor-run deletion | one manual read-only-permission workflow that rewraps the exact accepted Issue #33 unsigned installer, submits it to the configured Free Trial test policy, validates returned signer/bytes, and uploads a short-lived test-only artifact | preserve exact-schema protected configuration, module pin/hash, source/output fail-closed gates, short retention, and false publication authority; candidate/manual-publish workflows remain unchanged and production signing remains separate |
+| `plans/active-2026-08-13-dev38-test-signed-prerelease-spec.md` | active immutable DEV38-SIGN1 NO-GO snapshot; source integration and exact candidate/audit pass, but its required human acceptance was not completed and its reviewed body/policy cannot be rewritten | exact unpublished `0.4.0-dev.38` Draft, candidate-only Free Trial request/evidence, and unresolved ordinary-MAC5 decision | preserve the seven candidate assets/body and do not publish, mutate, relabel, or compose them into CPREL1; Foundation/production authority remains in SP-READY1 |
+| `plans/implemented-2026-08-13-conditional-prerelease-policy-spec.md` | implemented CPREL1 contract; source policy, protected integration, exact candidate/audit, conditional publication, and live update verification complete | durable schema-v2 actor-bound `CONDITIONAL_GO` validation, exact dev39 two-limit waiver, public disclosure, and acceptance-aware update projection | preserve ordinary GO compatibility and every artifact/security gate; dev39 remains conditional/public-prerelease-only and neither human observation is passed |
 | `project/active-development-roadmap.md` | active | milestone order and acceptance gates | continuously maintained from accepted evidence |
-| `plans/active-2026-08-10-rust-msrv-build-contract.md` | active integrated build contract; exact PR #29 head `f022d2c` passed all four jobs in run `31509554882`; merge `9e0b36b` passed all four exact-main jobs in run `31510716448`; Issue #28 closed | Rust 1.88 workspace MSRV metadata, Resolver 3, non-packaging stable/MSRV native CI, locked candidate Rust validation, and deterministic policy enforcement | enforce continuously; any dependency, target, runner, packaging, or MSRV change requires reviewed scope; no candidate or release authority |
+| `plans/active-2026-08-10-rust-msrv-build-contract.md` | active integrated build contract; exact PR #29 head `f022d2c` and merge `9e0b36b` historical four-leg evidence passed; Issue #28 closed; CI-FAST1 Draft-feedback amendment authorized 2026-08-18 | Rust 1.88 workspace MSRV metadata, Resolver 3, fast Draft feedback, non-Draft/main stable/MSRV native CI, locked candidate Rust validation, and deterministic policy enforcement | CI-FAST1 may change trigger timing and add cache without changing the six identities, commands, permissions, candidate validation, or final integration requirement; no candidate or release authority |
+| `plans/implemented-2026-08-18-rust-fast-development-ci-spec.md` | implemented; deterministic negative tests, exact Draft Fast/cache evidence, Ready skip, and deferred six-leg run `32129767978` passed 2026-08-18 | read-only Ubuntu-stable Draft feedback, Cargo cache isolation, mutually exclusive Draft/Ready admission, and deterministic workflow enforcement | preserve the split: Draft uses Rust Fast; affected Ready/`main` integration uses all six stable/MSRV legs |
+| `design/implemented-2026-08-14-plugin-runtime-phase-1-internal-plugins-design.md` | implemented; P1-0 through P1-4, final review, exact Ready matrix, and three-platform unsigned packaged acceptance passed 2026-08-18 | compiled-in first-party capability/scope/generation/effect/candidate lifecycle semantics above the Trusted Kernel | legacy deletion, third-party runtime, public SDK, target, compute, schema, permission, signing, publication, and release remain separately gated |
+| `plans/implemented-2026-08-18-p1-0-extension-runtime-contracts-spec.md` | implemented; `bb9f1e1`, focused determinism/dependency review, Draft Fast, and P1-4 six-leg acceptance passed | validated vocabulary, host-owned scope policy, deterministic capability graph/plan, structured errors/diagnostics, and dependency evidence | preserve capability/permission separation and internal-only API |
+| `plans/implemented-2026-08-18-p1-1-extension-runtime-lifecycle-spec.md` | implemented; lifecycle, local/fast evidence, final safety review, and six-leg acceptance passed | object-safe plugin/disposable API, bounded broker façade, effects/tasks/leases, scope generations, pointer CAS, and quiesce/dispose | preserve BH2/Agent authority, expected-old publication, non-routable failure, and legacy override |
+| `plans/implemented-2026-08-18-p1-2-run-history-source-spec.md` | implemented; `78c0493`, parity/isolation/restart/bounds, Draft Fast, and packaged Ready acceptance passed | fixed Run History source, host runs service, Store-backed broker façade, and project/generation isolation | Store remains sole authority; candidate errors do not retry legacy; command/mock protocol remains unchanged |
+| `plans/implemented-2026-08-18-p1-3-workspace-snapshot-viewer-spec.md` | implemented; runtime `d67c294`, product `f16283c`, focused Rust/R/browser evidence, and packaged Ready acceptance passed | Workspace scope, typed Snapshot tool, application Viewer, Agent adapter, trusted host injection, and browser parity | broker/Ark, Agent lane, `read_viewer_file`, generations, bounds, and public protocols remain authoritative |
+| `plans/implemented-2026-08-18-p1-4-default-acceptance-spec.md` | implemented; `0.4.1-dev.1` (allocated dev.0, bumped to dev.1 by `41c0220`), default/legacy smoke, local macOS, exact six-leg run `32129767978`, three packaged stable legs, final review, and Ready state passed | candidate default, legacy override, version/NEWS, installed-app evidence, internal API/safety decision, and final handoff | no legacy deletion, public SDK, third-party runtime, schema, signing, publication, updater manifest, release, Execution Target, Compute Job, Conda, SSH, or Slurm authority |
+| `design/active-2026-08-14-plugin-runtime-phase-2-workspace-third-party-design.md` | implemented and accepted for integration 2026-08-21; P2-0 through P2-4 complete at `0.4.1-dev.11`; exact head `dbd51d1` passed Draft Fast `32456277341` and all six hosted/package legs `32456281744`; owner moved visual modularization to a separate follow-on design stream and authorized PR #2 merge | project-local third-party workspace plugin discovery, manifest/digest, isolated host, broker-mediated permission grants, constrained handles, UI contributions, audit, disable/uninstall, and upgrade | preserve no-ambient-authority and capability/permission separation; release, publication, distribution, Phase 2.5 execution, Phase 3 and visual redesign remain separate |
+| `plans/active-2026-08-20-p2-1-wasm-isolated-host-spec.md` | implemented and accepted; local security/MSRV evidence plus exact three-platform stable/Rust-1.88 run `32456281744` pass | exact Wasmtime host, Guest ABI V1, no-import boundary, fuel/memory/epoch limits, cancellation, trap/quarantine, and source/installed negative probes | no ambient import/WASI, desktop authority, grant, privileged operation, contribution, storage or schema expansion |
+| `plans/active-2026-08-20-p2-2-read-only-broker-grants-spec.md` | implemented and accepted; P2-2A-F local evidence and exact three-platform run `32456281744` pass; `rho.bridge 0.1.15` | schema-v13 dedicated plugin permission requests/grants/events, trusted grant UI, fresh opaque handles, project.fs.read, workspace.r.inspect, and network.fetch | live handles remain memory-only and exact-identity bound; no write/process/arbitrary-R/credential/storage/contribution authority |
+| `plans/active-2026-08-20-p2-3-controlled-contributions-spec.md` | implemented and accepted; P2-3A-E local/full Rust+R and exact three-platform run `32456281744` pass; `rho.agent 0.1.6` | Manifest V2, no-import Guest ABI V2 contribution loop, transactional Tool/Source/Skill/Command/Viewer/named-panel registrations, trusted rendering and Agent projection | no dynamic registration, raw DOM/HTML/Tauri, provider/process/write/arbitrary-R/credential authority; visual modularization is separate |
+| `plans/active-2026-08-20-p2-4-plugin-lifecycle-recovery-upgrade-spec.md` | implemented and accepted; P2-4A-G complete at `0.4.1-dev.11`; exact head `dbd51d1`, Draft Fast `32456277341` and hosted/package run `32456281744` pass; owner visual-gate disposition and PR #2 merge authorization recorded | schema v14 durable state/transitions/events/tombstones, immutable package cache, enable/restart, disable/crash/retry, recoverable uninstall, upgrade CAS and rollback, installed Phase 2 audit | no release/publication/distribution/install/catalog authority; visual redesign, Phase 2.5 execution and Phase 3 remain separately gated |
+| `design/active-2026-08-19-plugin-runtime-phase-2-5-agent-authored-evolution-design.md` | active design; Phase 2 prerequisite is now accepted, but executable Phase 2.5 remains separately unauthorized; bounded P2.5-0-through-P2.5-6 pure-contract review-remediation remains implemented evidence only | Agent-authored and self-evolving project plugins: experience trace, recipe/Skill promotion, candidate builder, protected evaluation, lineage, standing policy, repair/rollback, capability gardener; current slice owns only pure predicates and negative tests | package digest remains executable identity; builder cannot self-authorize; no real observation, schema, Agent call, build, execution, production grant, activation, autonomous evolution, or UI; first-party promotion remains ordinary repository/release governance |
 | `plans/active-2026-08-05-macos-arm64-support-spec.md` | active broader platform plan; MAC1-MAC5 complete for published Apple Silicon candidate `0.4.0-dev.24`; protected Release and live development manifest pass without asset replacement | Apple Silicon macOS 14+ platform adapters, Ark/R integration, Keychain extension, additive macOS update artifact, signed DMG handoff, repository-bound rehearsal lane, async notarization orchestration, and MAC5 publication admission | preserve immutable release evidence; macOS x64 and Linux x64 remain open milestone scope |
+| `plans/active-2026-08-11-linux-appimage-support.md` | active authorized direction; LIN1-LIN4 source implementation present 2026-08-13; partial verification 2026-08-14 (LIN1/LIN3 fixture suites and `cargo fmt` pass; workspace suite runs with three pre-existing Linux update-manifest gaps in untouched `update.rs`; LIN2 build lanes and LIN5 remain unrun); LIN6 (Linux Secret Service credential storage) authorized 2026-08-14; **2026-08-20 amendment (PR #79 follow-up): deb target and Linux arm64 staging/build path authorized by owner**; LIN5 and the M3 release decision remain open | Linux x64 AppImage distribution, WebKitGTK 4.1 `AppRun` dependency check, Linux Ark bootstrap/sidecar, Linux R discovery, local/hosted Linux build lanes, Linux Secret Service credential storage (LIN6), deb target, and Linux arm64 staging/build (source install) | follow the macOS adapter template for configuration ownership, runtime manifest, R discovery, evidence, and Keychain/Secret-Service credential integration; keep Windows x64 and macOS arm64 behavior unchanged; no Linux distribution before the M3 gate; `.rpm`, the arm64 AppImage/deb packaging lane, and automatic Linux updates remain deferred |
 | `release/historical-0.4.0-dev.16-candidate-checklist.md` | historical; review-only rehearsals passed and the decision remained NO-GO before the baseline advanced | immutable `0.4.0-dev.16` rehearsal evidence and NO-GO snapshot only | cannot authorize or satisfy any later candidate, MAC5, or publication row |
 | `release/historical-0.4.0-dev.17-candidate-checklist.md` | historical; CRED-UX2 local matrix, browser review, and unsigned app/DMG smoke passed before CRED-UX3 advanced the baseline | immutable `0.4.0-dev.17` local evidence and NO-GO snapshot only | cannot authorize or satisfy any later candidate, installed acceptance, MAC5, or publication row |
 | `release/historical-0.4.0-dev.18-candidate-checklist.md` | historical rejected identity; CRED-UX3/CRED-UX4A local evidence passed, but owner installation exposed the settings-entry recovery deadlock | immutable `0.4.0-dev.18` source/artifact/hash, installed rejection, and NO-GO record only | cannot authorize or satisfy any `0.4.0-dev.19` candidate, acceptance, MAC5, or publication row |
@@ -62,7 +79,22 @@ semantics.
 | `release/historical-0.4.0-dev.30-candidate-checklist.md` | historical rejected-candidate contract; exact current-main run `31515775702` and seven-asset Draft `368736031` at `bcc8e1c` passed construction, but exact installed macOS acceptance failed the Data Viewer workflow | sole immutable `0.4.0-dev.30` source/Draft/installed-failure evidence and REJECTED/NO-GO decision | preserve the unpublished Draft; no acceptance upload, MAC5, publication, or update mutation may use `dev.30`; repair uses fresh `dev.31`; Windows installed/signing and Issue #33 closure remain separately open; prior evidence is non-composable |
 | `release/historical-0.4.0-dev.31-candidate-checklist.md` | historical rejected-candidate contract; DATA-VIEWER-ROW-SHAPE-R1 integration, exact run `31524766123`, seven-asset Draft `368795113`, independent trust/smoke evidence, browser interaction, and installed Data Viewer/focus/live-Provider repair/proposal slices pass; installed References/Rename fail | immutable `0.4.0-dev.31` source/Draft/installed pass-and-failure evidence and REJECTED/NO-GO decision | preserve the unpublished Draft; no acceptance upload, MAC5, publication, or updater mutation may use `dev.31`; all evidence is non-composable; repair uses fresh `dev.32` |
 | `release/historical-0.4.0-dev.32-candidate-checklist.md` | historical rejected candidate; WS2-R1-R1/RENAME-RECOVERY-R1 integrated through PR #41 and exact-head source CI passed, but candidate run `31552396659` produced a Windows artifact and failed the macOS discovery-timeout test fixture before packaging | immutable `dev.32` source, Windows artifact, macOS failure, and REJECTED/NO-GO evidence only | no tag, Release, macOS artifact, publication, or updater mutation exists; all `dev.32` evidence is non-composable; deterministic replacement uses fresh `dev.33` |
-| `release/active-0.4.0-dev.33-candidate-checklist.md` | active replacement source contract; deterministic source repairs, AGPL LIC-1/LIC-2, and SP-READY1 are integrated with exact-head/main hosted evidence; external Windows signing readiness remains open | sole `0.4.0-dev.33` source identity and any future exact candidate, installed, MAC5, publication, and updater evidence | no candidate before SignPath approval, real production configuration, two-stage signing implementation/verification, and all named release gates; installed acceptance, MAC5, publication, and candidate updater mutation remain separate |
+| `release/historical-0.4.0-dev.33-candidate-checklist.md` | historical superseded source-only contract; deterministic source repairs, AGPL LIC-1/LIC-2, and SP-READY1 integrated, but no candidate, tag, Release, or public artifact was created before PR #48/#50 changed user-visible behavior | immutable `dev.33` source and NO-GO ledger only | cannot authorize or satisfy `dev.34` artifact, installed acceptance, signing, MAC5, publication, or updater rows |
+| `release/historical-0.4.0-dev.34-candidate-checklist.md` | historical rejected internal acceptance package; source matrix and unsigned NSIS construction passed, but quoted registry `InstallLocation` handling stopped installed-byte resolution and cleanup before all scenarios | immutable `dev.34` source, installer hash, failed installed-resolution/cleanup evidence, and REJECTED/NO-GO decision | run `31633600383` and its artifact remain non-composable; no Issue closure, signing, candidate, MAC5, publication, or updater row may reuse `dev.34` |
+| `release/historical-0.4.0-dev.35-candidate-checklist.md` | historical rejected internal acceptance package; source matrix, NSIS build/install, installed-byte/runtime resolution, startup, and cleanup passed, but environment-only WebView2 CDP admission failed before all scenarios | immutable `dev.35` source, installer/executable hashes, startup/cleanup pass, CDP failure, and REJECTED/NO-GO evidence | run `31635375821` and artifact `9157190586` remain non-composable; no Issue closure, signing, candidate, MAC5, publication, or updater row may reuse `dev.35` |
+| `release/historical-0.4.0-dev.36-candidate-checklist.md` | historical rejected internal acceptance package; exact installed identity/runtime, five original Issue scenarios, screenshot, and cleanup passed, but the sixth harness waited on a project-lifecycle counter that watcher refresh does not mutate | immutable `dev.36` installer/executable hashes, five PASS results, harness failure, screenshot, cleanup, and REJECTED/NO-GO decision | run `31641866471` and artifact `9159573725` are non-composable; no Issue closure, signing, candidate, MAC5, publication, or updater row may reuse `dev.36` |
+| `release/active-0.4.0-dev.37-candidate-checklist.md` | active accepted Issue #33 source contract; exact protected-main source run `31644418691` and installed run `31644429787` pass all four source legs, all six installed scenarios, identity/runtime, screenshot, and cleanup at `7ab861b` | sole immutable `0.4.0-dev.37` Issue acceptance identity/evidence and any future exact candidate/release ledger | Issue #33 closure GO; artifact `9160516935` is unsigned internal review evidence only; ordinary candidates remain debug-port-free; signing, human installed acceptance, MAC5, publication, and updater gates remain open |
+| `release/active-0.4.0-dev.38-candidate-checklist.md` | active immutable DEV38-SIGN1 NO-GO ledger; source/artifact/audit and automated macOS support evidence pass, required human acceptance did not | sole unpublished `0.4.0-dev.38` Draft identity and evidence snapshot | cannot authorize dev.39 or publication; preserve exact seven assets/body and NO-GO truth |
+| `release/historical-0.4.0-dev.39-candidate-checklist.md` | historical published conditional prerelease; exact source/candidate/audit, v2 acceptance, protected Release run `31734766000`, and live update run `31734975029` pass; two human observations remain `NOT RUN` | immutable `0.4.0-dev.39` asset/evidence binding, exact conditional limitations, publication, and update record | preserve release/tag/update evidence and limitation truth; it cannot satisfy a successor candidate or convert either human row into a pass |
+| `plans/active-2026-08-10-versioned-release-notes-spec.md` | active; RELEASE-NOTES-1 source implementation, complete affected automation, and contract review passed 2026-08-10; first new-candidate hosted acceptance open | reviewed per-tag Markdown as the sole body source for newly constructed Releases, exact-body publication stale guard, and one explicit `dev.27` compatibility bridge | preserve unchanged Draft `367934137`; the next unused candidate must carry and exercise its own reviewed file before hosted acceptance; no asset/evidence, updater, or signing scope |
+| `plans/active-2026-08-15-tauri-native-updater-spec.md` | active; `UPDATER-1A`/`UPDATER-1B` complete; exact dev.41 target publication passed in `31989055536`; dual-platform rejection window `31990624696` and recovery/install window `31991536953` passed and cleaned to `404`; installed Windows executable remained `NotSigned` | separately signed Tauri native updater for Windows x64 and macOS arm64: explicit-user install/restart, compiled public key, final-byte updater signatures, native manifest projection, exact updater acceptance, and the bounded dev.41 test-target bridge | preserve immutable dev.40 source/dev.41 public target bytes and passed runtime behavior evidence; dev.40 publication/permanent endpoint remain NO-GO; dev.42 alone owns the two-stage signing replacement |
+| `release/active-0.4.0-dev.41-native-updater-acceptance-target-checklist.md` | accepted bounded `UPDATER-1C-T1` transport evidence; exact twelve-asset dev.41 target remains public/excluded from normal Update Site; both two-platform behavior windows and cleanup passed | one fresh higher signed test target, exclusion marker, and bounded temporary Tauri development manifests proving dev.40→dev.41 rejection, recovery, and install/restart behavior | retain acceptance-only visibility and passed evidence; installed Windows `NotSigned` is a release blocker, not a reason to relabel or alter dev.40/dev.41 bytes |
+| `plans/active-2026-08-17-signpath-free-trial-two-stage-dev42-spec.md` | active `SP-FT2-DEV42`; initial source integrated; pre-Draft run `31999076405` passed both signing requests but rejected installed hash after Tauri's hidden bundle-type patch; deterministic pre-sign patch and local validation pass, protected repair integration pending | dev.42-only two-stage signing topology, pre-sign NSIS bundle-type normalization, build modes, binary/installer requests, installed-byte evidence, and bounded progression to a permanent native development endpoint | consumes Issue #26 signing authority and UPDATER-1 runtime/public-key/acceptance lanes; failed run evidence is non-composable; preserves dev.40 Draft/dev.41 test target, untrusted disclosure, stable 404, and no production-Foundation claim |
+| `release/active-0.4.0-dev.42-two-stage-signing-checklist.md` | active source/candidate checklist; failed run created no tag/Draft/Release/Windows evidence; exact pre-sign patch/local matrix pass and new protected integration is pending | sole exact dev.42 source, two-stage candidate, installed/update acceptance, decision, publication, and permanent endpoint evidence | no failed-run artifact/hash/request/notarization may be reused; every candidate/publication phase stops separately and requires exact evidence |
+| `plans/implemented-2026-08-17-three-platform-automatic-updater-dev43-spec.md` | implemented `AUTO3-DEV43`; protected source, candidate, publication, and live three-target development manifests passed | immutable dev.43 runtime auto-install policy, transactional Linux replacement, and published evidence record | stable promotion may consume behavior but never dev.43 artifact/signature/evidence bytes; Free Trial and Apple trust facts remain exact |
+| `release/historical-0.4.0-dev.43-three-platform-updater-checklist.md` | historical published prerelease; exact main/candidate/acceptance/publish/Pages evidence passed | sole immutable dev.43 source/candidate/publication/live evidence ledger | no asset, signature, or acceptance record composes into stable 0.4.0 |
+| `plans/implemented-2026-08-17-stable-0.4.0-release-spec.md` | implemented `STABLE-040`; exact source/candidate, protected stable publication, Pages repair, and live verification passed | stable SemVer identity, SemVer-derived GitHub release state, stable/development updater projection, and no-reviewer automated publication | immutable release targets `fca8e307`; preserve Free Trial trust disclosure, Apple trust, exact signed-byte gates, package versions, and runtime behavior |
+| `release/historical-0.4.0-stable-release-checklist.md` | historical `GO / RELEASED / LIVE` record for public non-prerelease `v0.4.0` | sole `0.4.0` stable identity, exact candidate, decision, public Release, and stable-channel evidence ledger | release assets are immutable; future behavior or artifact change requires a new version and fresh evidence |
 | `plans/accepted-2026-07-25-0.3x-scientific-workflow-handoff.md` | active implementation contract; WP1-WP4 code landed, automated review accepted with follow-up, milestone manual acceptance open | `0.3.x` environment, viewer, artifact, skill contracts and final acceptance | remaining representative-project and manual UI acceptance; affected evidence reruns after BH1 |
 | `release/active-0.2.0-release-hardening-spec.md` | engineering complete; release acceptance active | exact `0.2.0-dev.12` hardening and evidence contract | remaining candidate acceptance only |
 | `release/active-0.2-release-checklist.md` | active | sole `0.2.0-dev.12` GO/NO-GO checklist | P0 human evidence against the exact candidate |
@@ -72,6 +104,8 @@ semantics.
 | `plans/active-2026-07-28-bh2-project-switch-state-machine-handoff.md` | accepted | broker-owned project-switch preflight, blocked/synchronized/committed/failed-restored outcomes, and deterministic switch recovery | BH4 is accepted; BH5 is active |
 | `plans/active-2026-07-29-bh4-retention-privacy-artifact-lifecycle-handoff.md` | accepted | project-scoped retention, truthful hide/prune/delete semantics, artifact and plot lifecycle rules, tombstones/retained metadata, and privacy-facing documentation/tests | BH4 verification, independent review, and acceptance gate are complete |
 | `plans/active-2026-07-31-bh5-incremental-module-boundaries-handoff.md` | accepted | behavior-neutral extraction of store and command modules by durable domain (runs, Agent, Artifacts, environment, project/session) | BH5 extraction and regression evidence complete per domain |
+| `plans/implemented-2026-08-20-project-application-service-seam-spec.md` | implemented; APP-SVC1 local matrix, PR #99 integration, and exact-main six-leg run `32364857002` passed 2026-08-20 | thin re-exported `rho-store` query/mutation services plus behavior-compatible Tauri call-site migration for existing project-scoped operations | `Store` remains sole persistence authority; explicit project identity is mandatory; no schema, command/mock/public protocol, approval, credential, or new mutation semantics |
+| `plans/active-2026-08-20-tauri-runs-command-module-spec.md` | active; TCMD-RUNS1 implementation, local matrix, `0.4.1-dev.2` synchronization, and independent review complete 2026-08-20; hosted CI pending | `list_runs`, Problems, Run detail/compare, reproducibility-audit command ownership plus generated command inventory | preserve BH5, APP-SVC1, Phase 1 Run History, Store, project/generation, bounds, command signature/order, and frontend/mock contracts; retry/cancel and every later domain require separate packages |
 | `plans/active-2026-07-31-ra-rc1-run-comparison-handoff.md` | accepted | read-only deterministic two-run comparison over existing durable records | RA-RC1 is accepted; UX1 active |
 | `plans/active-2026-07-31-ux1-interaction-foundation-handoff.md` | accepted | interaction inventory, terminology contract, state presentation contract, mock fixtures, usability protocol | UX1 accepted; UX2 may proceed |
 | `plans/active-2026-08-02-agent-entry-and-direct-surface-polish-spec.md` | active; implementation and automated/browser verification complete 2026-08-02 | simplified Agent entry and current Agent-first Direct presentation only | policy and authority boundaries preserved; installed-app acceptance remains open; broader UX4 work still requires separate authorization |
@@ -82,23 +116,23 @@ semantics.
 | `plans/active-2026-08-04-interface-modernization-foundation-shell-spec.md` | active; M1 implementation and automated/browser verification complete 2026-08-04 | presentation-only semantic tokens, shared controls, local icons, shell hierarchy, tab roles, focus, and responsive geometry | installed-app/display-scale acceptance open; themes and workflow-surface redesign remain proposed |
 | `plans/active-2026-08-04-interface-modernization-workbench-hierarchy-spec.md` | active; M2 implementation and automated/browser verification complete 2026-08-04 | Human-first editor hierarchy, existing tab and panel geometry presentation, and correct restoration of the existing `human_preset` value | installed-app/display-scale acceptance remains separate; themes remain proposed |
 | `plans/active-2026-08-05-workbench-menu-command-organization-spec.md` | active; UX-MENU-1 implementation and automated/browser verification complete 2026-08-05; installed acceptance open | five-menu command organization, truthful local command state, and keyboard menu traversal over existing actions | M2 retains layout/panel authority; editor shortcuts retain command ownership; Format/Render retain behavior; Viewer/Outputs is a later independent package |
-| `plans/active-2026-08-05-outputs-viewer-spec.md` | active; OUTPUTS-VIEWER-1 implementation and automated/browser verification complete 2026-08-05; HTML budget repair implemented and automated verified 2026-08-06; HTML-FRAGMENT-NAV-1 implemented and automated/browser verified 2026-08-06; installed acceptance open | Outputs projection and bounded central inspection of Plot, exact Artifact HTML, Markdown buffers, and CSV/TSV files, including a 32 MiB HTML-only budget and sandbox-local fragment navigation | WP3/P2-3A/P2-3B retain Artifact and Render truth; PLOT-UX1 retains Plot history; UX4-AWS1 retains Agent work surfaces; project containment, sandbox authority, blocked non-fragment navigation, the 4 MiB non-HTML budget, and remaining proposed WS3/WS5 scope are unchanged |
+| `plans/active-2026-08-05-outputs-viewer-spec.md` | active; prior Viewer packages implemented; OUTPUTS-IMAGE-ARTIFACT-R1 implementation and exact local zero-Plot PNG acceptance complete 2026-08-19; release matrix open | Outputs projection, exact bounded Artifact reads, selected image Artifact main-stage preview, and central Viewer inspection | Artifact/Plot truth remains WP3/PLOT-UX1; image reads reuse `viewer_read_file`; preserve project/media/4 MiB bounds, async stale rejection, sandbox, persistence, network, execution, write, and release boundaries |
 | `plans/active-2026-08-04-interface-modernization-scientific-agent-surfaces-spec.md` | active; M3 implementation and automated/browser verification complete 2026-08-04 | presentation-only status language, scientific/Agent state hierarchy, and distinction among existing review lanes | installed/display-scale acceptance remains separate; `0.3.x` manual gates remain open; Phase 4 remains proposed |
 | `plans/active-2026-08-04-five-usability-repairs-spec.md` | active; UX-FIX1 through UX-FIX5 implemented and automated/browser verified in five separately reviewed packages; Issue #33 explicit-Console-focus coordination recorded 2026-08-11 | truthful Problem navigation, explicit save shortcut, clearer file hierarchy, explicit Console-tab focus, and human-reviewable Agent Runs/Review projection | WP3/UX4/M1-M3/CL1/WS2 authority preserved; Issue #33 owns background/completion focus admission; exact installed-candidate acceptance remains open |
 | `plans/active-2026-08-05-native-context-lint-problems-editor-shortcuts-spec.md` | active; all five bounded packages implemented and automated/browser verified in separate commits; exact installed-candidate acceptance remains open | desktop context-menu policy, installed Lint transport, Check code entry, transient diagnostic clearing, and common editor shortcuts | WS2 diagnostics/refactor/format, WP3 durable Problems, UX-FIX2 Save, and M1-M3 presentation authority preserved; no schema or new mutation authority |
 | `plans/active-2026-08-10-run-current-line-advance-repair-spec.md` | active; Issue #15 ISSUE-15-EDITOR-1 implementation, focused/adjacent automated validation, 40 compatible frontend contracts, Monaco/basic browser review, and post-verification contract review complete 2026-08-10; Issue #33 completion-focus amendment recorded 2026-08-11; two pre-existing Linux path-case test failures and installed Windows acceptance open | current-line-only next-line cursor transition and immediate editor focus over the implemented WP2 execution path | WP2 retains execution/provenance and document cursor ownership; editor-shortcuts retains binding admission; Issue #33 owns source-completion focus admission; UX-FIX4 retains explicit Console-tab focus; no backend, schema, policy, mutation, project, or release authority |
 | `plans/active-2026-08-10-modal-focus-guard-repair-spec.md` | active; Issue #18 ISSUE-18-EDITOR-1 implementation and focused automated validation complete 2026-08-10; Issue #33 explicit-focus-intent amendment recorded 2026-08-11; installed Windows acceptance open | document renders never take editor focus while a `role="dialog"` surface is visible; single `modalDialogIsOpen()` predicate shared with shortcut suppression | WP2 retains document render/selection/cursor ownership; Issue #33 owns no-modal background focus admission; dialog focus traps and `returnFocus` restoration unchanged; no backend, schema, policy, mutation, project, or release authority |
 | `plans/active-2026-08-10-windows-agent-r-script-launch-repair-spec.md` | active; Issue #2 launcher/aisdk/fresh-readiness implementation, exact `dev.29` validation/review, upstream PR #24 integration at `f05315c`, and Issue closure pass; installed `dev.29` acceptance remains open | Windows desktop Agent R script transport through a temporary UTF-8 `.R` file plus complete-Agent aisdk readiness admission that never trusts general R/Ark cache state | Windows startup retains R discovery and optional-runtime cache ownership; Agent LLM configuration retains Provider/credential/routing and fresh readiness authority; Conversation concurrency retains turn identity, scheduling, cancellation, and persistence; no schema, frontend, focus behavior, approval, or release authority |
-| `plans/active-2026-08-11-workbench-focus-stability-repair-spec.md` | active; Issue #33 ISSUE-33-INTERACTION-1 source implementation, review, hosted CI, PR #34 integration, browser interaction, and exact `dev.31` installed macOS interaction pass; EDITOR-VIEWPORT-R1 implementation, full frontend validation, Apple Silicon build, installed local watcher-trigger verification, and user acceptance complete 2026-08-12; installed Windows acceptance open | interaction-safe volatile refresh, explicit focus/reveal authority, activation preservation, and user-owned reading position across Project files/tabs, Agent, Runs, Problems, Plots/Outputs, Environment/Data Viewer, Git review, editor, Console, and Logs | WP2 retains document/cursor truth and explicit navigation; background project refresh may synchronize but not reveal; WP3/UX4/Agent conversation/Environment retain data, execution, polling, selection, approval, and mutation truth; Issue #15 cursor advancement, Issue #18 modal predicate, and UX-FIX4 explicit Console focus preserved; no schema, backend, credential, filesystem, or project authority |
+| `plans/active-2026-08-11-workbench-focus-stability-repair-spec.md` | accepted for Issue #33 closure; source implementation/review, installed macOS verification, EDITOR-VIEWPORT-R1, exact-main four-leg source run `31644418691`, and clean-profile installed Windows six-scenario run `31644429787` pass at `7ab861b` on 2026-08-12 | interaction-safe volatile refresh, explicit focus/reveal authority, activation preservation, and user-owned reading position across Project files/tabs, Agent, Runs, Problems, Plots/Outputs, Environment/Data Viewer, Git review, editor, Console, and Logs | WP2 retains document/cursor truth and explicit navigation; background project refresh may synchronize but not reveal; WP3/UX4/Agent conversation/Environment retain data, execution, polling, selection, approval, and mutation truth; Issue #15 cursor advancement, Issue #18 modal predicate, and UX-FIX4 explicit Console focus preserved; no schema, backend, credential, filesystem, project, signing, candidate, or publication authority |
 | `plans/active-2026-08-11-data-viewer-row-shape-repair-spec.md` | active; DATA-VIEWER-ROW-SHAPE-R1 implementation, review, hosted matrix, PR #39 integration, exact `dev.31` candidate/trust/browser evidence, and installed macOS 120/121-row stale-recovery workflow pass | conformance of existing WP2 `cells`/`cell_states` ordered-array response shape, end-to-end shape verification, and truthful viewer failure classification | implemented WP2 retains object/view/page/revision/bounds authority; WS3-Q1/Q2 retain query/sort/type/cell-state semantics; Issue #33 retains presentation focus/refresh authority; `dev.31` was rejected by unrelated References/Rename; no schema, mutation, polling, project, approval, credential, export, or release authority |
 | `plans/active-2026-08-05-audit-human-friendly-presentation-spec.md` | active; AUDIT-UX1 implemented and automated/browser verified 2026-08-05; installed acceptance open | shared human-friendly projection for the existing read-only project reproducibility check | RA-RC2 rules/schema/status truth, UX4-AWS1 work surfaces, and M1-M3 presentation authority preserved; no backend, persistence, repair, or execution scope |
 | `plans/active-2026-08-05-audit-runtime-reliability-repair-spec.md` | active; AUDIT-REL1 implementation and automated verification complete 2026-08-05; installed acceptance open | Unicode-safe audit execution, existing Windows drive-path coverage, panic/timeout recovery, stale-request rejection, and dirty-source preflight | accepted RA-RC2 retains rule/schema/status truth; AUDIT-UX1 retains presentation language; no persistence, repair, automatic save, execution, or release scope |
 | `plans/active-2026-08-07-project-check-source-filter-spec.md` | active; implementation and automated verification complete 2026-08-07; installed acceptance open | Check Project source-file admission limited to R/Rmd/Qmd/Rnw and extensionless source files | AUDIT-REL1 owns audit execution/recovery and AUDIT-UX1 owns presentation; no rule, persistence, mutation, or project-scope change |
 | `plans/active-2026-08-07-project-skills-discovery-and-tree-repair-spec.md` | active; implementation and automated verification complete 2026-08-07; installed acceptance open | acceptance-project manifest repair and visible `.rho/skills` project-tree discovery | WP4 owns bounded untrusted skill discovery; project file visibility adds no execution, mutation, credential, or prompt authority |
-| `plans/active-2026-08-06-agent-result-transport-recovery-spec.md` | active; ART-1 implementation, contract review, automated verification, and `0.4.0-dev.1` candidate version reconciliation complete 2026-08-06; installed acceptance open | bounded model-facing Agent result projection and response/event workspace identity synchronization | accepted scientific and Agent handoffs retain execution, revision, approval, event persistence, Plot/Artifact, and project authority; no schema, frontend, or release scope |
+| `plans/active-2026-08-06-agent-result-transport-recovery-spec.md` | active; ART-1 complete; ART-2 redacted Provider failure projection, focused tests, and local persisted 404/429 UI acceptance passed 2026-08-19 | bounded model-facing results, workspace identity synchronization, and bounded terminal Provider failure projection | preserve execution/revision/approval/event/Provider authority; no schema, retry, fallback, credential, raw URL/body, or release scope; broader installed acceptance remains open |
 | `plans/active-2026-08-06-file-proposal-collapse-spec.md` | active; FPC-1 implementation and automated/browser verification complete 2026-08-06; FPC-2 implementation, full frontend validation, Apple Silicon build, installed local verification, and user acceptance complete 2026-08-12; installed Windows acceptance open | native disclosure, compact summary, and user-owned Before/After/disclosure reading position for the existing Agent file-proposal review surface | Issue #33 retains shared volatile-render and Agent timeline focus/reading authority; FILE-PROPOSAL-COMPLETION-1 retains post-Accept collapse and verified-only Undo; implemented file-editing contracts retain proposal, persistence, stale, mutation, and undo authority; no polling, schema, backend, filesystem, project, or new approval authority |
-| `plans/active-2026-08-07-file-proposal-completion-state-spec.md` | active; FILE-PROPOSAL-COMPLETION-1 implementation, automation, browser interaction, and exact `dev.31` installed live-proposal Accept/verified-Undo pass | post-accept compact state and verified-only Undo projection over the existing proposal surface | FPC-1 owns disclosure mechanics; implemented file-editing contract owns mutation, stale checks, persistence, and undo semantics; `dev.31` was rejected by unrelated References/Rename; no new authority |
-| `plans/active-2026-08-06-act-file-apply-and-generated-output-capture-spec.md` | active; AFO-1 implementation and automated/browser verification complete 2026-08-06; installed acceptance open | exact-turn Act session authorization for file proposal apply and bounded `workspace.execute` generated-file registration | file-editing retains validation/mutation/Undo; WP3 retains Artifact schema/provenance; Agent Outputs and Viewer retain projection/read authority; Environment/Git/package approvals excluded |
+| `plans/active-2026-08-07-file-proposal-completion-state-spec.md` | active; FILE-PROPOSAL-COMPLETION-1 passed; FILE-PROPOSAL-VALIDITY-R1 implementation, focused backend/frontend regression, and exact persisted invalid-proposal UI acceptance passed 2026-08-19 | post-accept compact state, verified-only Undo, structural validity, parent-turn terminal gate, and distinct invalid/running/stale projection | FPC-1/file editing/AFO authority preserved; no fuzzy relocation, inferred selection, new operation/schema/filesystem authority, Provider call, or full-suite claim |
+| `plans/active-2026-08-06-act-file-apply-and-generated-output-capture-spec.md` | active; AFO-1 implementation and automated/browser verification complete; FILE-PROPOSAL-VALIDITY-R1 terminal/validity gate cross-reviewed 2026-08-19 | exact-turn Act session authorization for valid terminal file proposal apply and bounded `workspace.execute` generated-file registration | auto-apply must not consume its attempt or mutate before parent terminal/valid preflight; file editing retains mutation/stale/Undo; no new authority |
 | `plans/active-2026-08-06-user-directory-first-start-spec.md` | active; PROJECT-DEFAULT-1 implementation and focused Rust verification complete 2026-08-06; installed acceptance open | no-history startup default root resolution from the current user's directory | project store, project identity, and saved-project restoration remain authoritative; installed first-start acceptance remains separate |
 | `plans/active-2026-08-06-agent-output-copy-spec.md` | active; AGENT-COPY-1 implementation and focused frontend verification complete 2026-08-06; installed acceptance open | copy action for the selected final Agent answer using existing clipboard behavior | Agent turn persistence, event history, diagnostics, and backend authority remain unchanged; installed clipboard acceptance remains separate |
 | `plans/active-2026-08-06-generated-output-review-spec.md` | active; OUTPUT-REVIEW-1 implementation and focused verification complete 2026-08-06; installed acceptance open | automatic Review previews and user-focused metadata for project-generated files, including image, table, and source content | existing project containment, Viewer security, Artifact provenance, and read-only authority remain unchanged; installed visual acceptance remains separate |
@@ -106,9 +140,9 @@ semantics.
 | `plans/active-2026-08-06-environment-approval-reconciliation-spec.md` | active; implementation and focused frontend verification complete 2026-08-07; installed acceptance open | direct environment approval terminal-state reconciliation and refresh-failure isolation | dedicated environment-operation request table, project/revision/snapshot stale guards, and separate Agent approval lane remain authoritative |
 | `plans/active-2026-08-07-environment-demo-fixture-spec.md` | active; implementation and fixture validation complete 2026-08-07 | disposable Environment demo project with followable README, valid lockfile, and base-R example | Environment contract owns package/lockfile authority; fixture adds no application, mutation, credential, or release authority |
 | `plans/active-2026-08-08-environment-information-hierarchy-spec.md` | active; ENVIRONMENT-UX-1 implementation in progress | Overview / Reproducibility / Variables hierarchy with Installed and Lockfile in a modal inventory | Existing Environment contract retains package/lockfile authority, operation approval, object inspection, and project scope; no backend or schema change |
-| `plans/active-2026-08-05-human-facing-information-projection-spec.md` | active; WP1-WP4 implementation and automated/browser verification complete 2026-08-05; installed acceptance open | shared user-facing projection of internal identifiers, errors, statuses, paths, and implementation terminology | UX1 language authority and all existing workflow/backend authority preserved; installed/display-scale acceptance remains separate |
-| `plans/active-2026-08-05-system-credential-and-simple-llm-settings-spec.md` | active; CRED-UX1/2/3/4A and later recovery packages implemented; CRED-UX3-R1 deterministic timeout-fixture repair and complete local verification/review pass after the `dev.32` candidate failure | shared native system-credential semantics, Model settings, bounded Provider discovery, three-layer Connection/Model/Capability routing, reviewed `aisdk.providers` integration, destructive settings workflows, and deterministic verification of the existing timeout class | CRED-UX3-R1 changes test support only; the 15-second product timeout, endpoint/credential/network authority, one-credential/no-fallback rules, schema, and runtime remain unchanged; exact-head hosted CI/integration and all release gates remain open; CRED-UX4B/C workers/media remain unauthorized |
-| `plans/active-2026-08-04-plot-review-surface-spec.md` | active; PLOT-UX1 implemented and automated/browser verified 2026-08-04; installed acceptance open | plot-first preview layout, side Plot navigation, progressive disclosure, and human-readable Saved outputs projection | WP3/BH4/PLOT-PAYLOAD-1/PLOT-ROOT-1/M1-M3 authority preserved; installed acceptance remains open |
+| `plans/active-2026-08-05-human-facing-information-projection-spec.md` | active; WP1-WP4 complete; ART-2 controlled Provider error mapping cross-reviewed 2026-08-18 | shared user-facing projection of internal identifiers, errors, statuses, paths, implementation terms, and redacted Provider failure classes | ART-2 may show HTTP status/category and next action in existing Agent surfaces; raw URL/body, credentials, transport/process detail, backend authority, and installed/display-scale acceptance remain excluded/separate |
+| `plans/active-2026-08-05-system-credential-and-simple-llm-settings-spec.md` | active; CRED-UX1/2/3/4A and later recovery packages implemented; CRED-KEYCHAIN-R1 no-prompt startup/settings passed but owner acceptance found per-conversation prompts; CRED-KEYCHAIN-R2 zeroizing selected-Provider session reuse authorized 2026-08-18 | shared native system-credential semantics, Model settings, bounded Provider discovery, routing, destructive workflows, lazy selected-Provider access, zeroizing process-session reuse, and deterministic verification | R2 may directly use locked `zeroize 1.9.0`, cache only an actually used Provider until replace/delete/refresh/shutdown, and preserve zero-read projection and no-fallback enforcement; no all-Provider unlock, combined/persistent vault, schema, credential source, permission, network, release, or CRED-UX4B/C authority |
+| `plans/active-2026-08-04-plot-review-surface-spec.md` | active; PLOT-UX1 implemented; OUTPUTS-IMAGE-ARTIFACT-R1 main-stage sharing cross-reviewed 2026-08-19 | Plot preview/history scope and side navigation within the shared Outputs stage | Plot scope/selection remains distinct; selected Saved image Artifact may use the stage without entering Plot history or changing Plot persistence/retention authority |
 | `plans/active-2026-08-04-agent-execution-output-review-repair-spec.md` | active; AGENT-LOOP-1 implemented and automated/browser verified 2026-08-04; duplicate-Plot repair implemented and automated verified 2026-08-05; adaptive long-running Act budget implemented 2026-08-06; HUMAN-OUTPUT-REFRESH-1 implemented and automated/browser verified 2026-08-06; installed acceptance open | display-only path cleanup, direct Act execution instruction, Agent-first Outputs-to-Review loop, single-execution duplicate Plot suppression, adaptive long-running Act liveness, and Agent-to-Human refresh of existing Plots and WP3 Artifacts | existing project/session filters, persistence, Workspace R identity, project/revision/approval/tool guards preserved; no new schema or authority; exact installed-candidate acceptance remains open |
 | `plans/active-2026-08-04-plot-payload-normalization-repair-spec.md` | active; PLOT-PAYLOAD-1 implemented and automated/browser verified 2026-08-04; installed acceptance open | canonical PNG base64 ingress plus compatible historical preview/export | WP3 provenance/export, BH4 retention, and M3 presentation boundaries preserved; rebuilt installed-app confirmation remains open |
 | `plans/active-2026-08-04-plot-project-root-query-repair-spec.md` | active; PLOT-ROOT-1 implemented and automated verification complete 2026-08-04; installed acceptance open | consistent durable project-root normalization for existing Plot list, retention, prune, and delete commands | WP3/BH1/BH2/BH4, PLOT-PAYLOAD-1, and M3 authority preserved; rebuilt installed-app QC confirmation remains open |
@@ -215,8 +249,87 @@ SignPath Foundation, so a policy link alone is insufficient. PR #46 owns the
 linked attribution, explicit pending-application disclosure, README/download-
 page instructions, and deterministic positive/negative enforcement. It changes
 no installer, credential, updater, signing, candidate, schema, or application-
-version behavior. Deployment and live-page verification remain distinct from
-source presence.
+version behavior. Exact head `0e618c8` passed run `31563972114`, received
+independent latest-push CODEOWNER approval, and merged as `71dfd3a`; exact-main
+run `31576354218` passed all four source legs. Update-site run `31646300758`
+then published `gh-pages@76d463a` from exact current main `b6bc441` without
+changing the published `dev.24` identity or artifact hashes. Independent live
+review confirmed the pending-application disclosure, both official attribution
+links, both uninstall instructions, retention warning, policy links, and
+unsigned-Windows statement. PR #46 integration/deployment is accepted. The
+owner MFA audit, Foundation decision, approved-project GitHub App/trusted-build
+configuration, real identifiers, production signing, candidate, and release
+gates remain external or later-owned facts.
+
+The subsequent external audit found a real SignPath Free Trial organization,
+valid `rho` project, self-signed test certificate, valid `test-signing` policy,
+valid installer artifact configuration, submitter API token, and protected
+repository secret. That corrects the stale claim that no SignPath project or
+identifiers existed, but it does not establish Foundation acceptance, public
+Windows trust, or production-signing readiness. The owner explicitly
+authorized FT-SIGN1 to validate only this existing test transport. Its owning
+contract isolates one exact unsigned Issue #33 artifact from candidate and
+manual-publish workflows, writes no Release/update state, and stops after one
+accepted hosted request. The initial variable interface is superseded because
+GitHub renders a step environment before an in-step mask can execute; one
+exact-schema protected JSON secret now owns all deployment values and must be
+expanded only after strict validation. This resolves the conflict in PR #51,
+whose older design coupled the
+test certificate directly to publication lanes and therefore must not merge.
+
+Protected integration of FT-SIGN1 and its logging correction preserved those
+boundaries, but the hosted GitHub connector returned HTTP 400 authorization
+failure after validating the real GitHub artifact. A dedicated regular CI user
+with only the existing test policy's Submitter role and a valid REST token did
+not change that hosted result. The same policy's SignPath-managed CI Integration
+surface explicitly documents the official `Submit-SigningRequest` PowerShell
+module. FT-SIGN1 may therefore replace only its connector transport with an
+exact-version, module-file-hash-verified, local-ZIP REST upload. It may not add
+origin claims, a trusted-build link, production policy/certificate use,
+candidate/manual-publish changes, or reuse the returned test bytes publicly.
+Run `31674347116` proved that direct transport and signature verification work,
+but its pre-script environment log exposed the organization identifier. It is
+failure evidence, not accepted smoke evidence. The bounded recovery may migrate
+the five deployment values into one protected JSON secret, reject malformed or
+extra configuration before module install, remove the obsolete variables after
+a clean retry, and rerun once without expanding signing or publication scope.
+That recovery completed in protected-config merge `6714e73`. Replacement run
+`31675464182` passed, its request is visible as `Completed`, downloaded evidence
+reproduced signer/hash/no-publication facts, and a full log scan found no unique
+deployment value. The obsolete variables and leaked predecessor run were then
+deleted. FT-SIGN1 is complete; its self-signed bytes cannot satisfy candidate,
+public trust, production signing, MAC5, publication, or updater gates.
+
+DEV38-SIGN1 is the separately authorized D4/R4 bridge from that completed
+transport proof to one fresh prerelease candidate. It cannot compose or relabel
+the FT-SIGN1 `dev.37` request or artifact. Candidate mode alone may submit the
+new final NSIS installer after complete build/smoke checks, then embed bounded
+request/module/thumbprint/self-signed/pre-sign/post-sign facts in the existing
+Windows platform evidence before aggregation. Fork rehearsal remains unsigned
+and cannot enter Draft/publication admission. A valid Free Trial record is
+required for every newly constructed candidate, while compatibility remains
+limited to the exact accepted `dev.27` Draft and published `dev.24` evidence.
+
+This package does not satisfy SignPath Foundation acceptance, production
+publisher trust, GitHub App/trusted-build, organization-owner MFA, or the
+planned two-stage production executable/installer process. Public release notes,
+the code-signing policy, and evidence-derived download-page wording must all say
+that `dev.38` uses a Free Trial self-signed test certificate, is not publicly
+trusted, and may still trigger Windows/SmartScreen warnings. About/Update V1
+retains manifest/Pages authority; RELEASE-NOTES-1 retains exact body ownership;
+the `dev.38` checklist alone may bind final artifacts, human installed
+acceptance, MAC5, and publication. Automation cannot replace that human gate.
+
+On 2026-08-13 the project owner explicitly authorized a different public
+decision: one evaluation-only conditional prerelease may disclose Windows
+human installation and enabled-Gatekeeper human launch as not run. CPREL1 owns
+that new decision and advances to fresh `dev.39`; it does not retroactively
+weaken or rewrite DEV38-SIGN1. Ordinary schema-v1 `GO`, candidate construction,
+signing/notarization, hashes, log privacy, protected publication, and exact-body
+controls remain intact. Schema-v2 `CONDITIONAL_GO` is actor-bound,
+public-prerelease-only, allowlisted to `dev.39`, and requires the canonical two
+limitations. About/Update V1 keeps manifest and Pages authority, while CPREL1
+adds acceptance validation and conditional disclosure to that projection.
 
 ### Navigation and layout state
 
@@ -570,6 +683,106 @@ update contract overlaps this build-only authority.
 
 ### Release boundaries
 
+`WINDOWS-INSTALLED-ISSUE33-A1` separates product-defect closure from public
+release admission. An unsigned, exact-source, clean-profile Windows package may
+prove Issue #33's six named interactions and close that Issue, but it cannot
+satisfy Authenticode, exact signed-candidate, broad human installed acceptance,
+MAC5, publication, or updater evidence. The `0.4.0-dev.37` checklist owns both
+that narrow allowance and the continued release `NO-GO`; no feature document
+may relabel the review artifact as a candidate.
+
+Two pre-artifact Ark download attempts returned GitHub Release `503` responses.
+The bounded recovery amendment remains inside the same acceptance authority:
+four checksum-before-promotion attempts may recover a transient transport
+failure, while exhaustion still fails closed. It adds no credential, mirror,
+runtime-version, installer, signing, release, or publication authority, and a
+run that stops before package construction does not consume its single-use
+artifact identity. A later `dev.34` run did construct an installer and exposed
+a quoted NSIS registry-path defect before all scenarios and cleanup. Its exact
+failure is historical and non-composable. `dev.35` normalized one balanced
+outer quote pair in both normal resolution and fail-closed cleanup, but its
+environment-only WebView2 debug request was superseded by Wry's explicit
+browser arguments. `dev.36` may use one repository-owned Tauri configuration
+overlay only in the Issue #33 workflow, bound to loopback; ordinary candidate
+builds pass no overlay. Neither correction may guess registry paths or add
+installer, signing, release, publication, credential, or product authority.
+Run `31638482434` then compiled the `dev.36` release executable twice, but the
+official Tauri NSIS-tool transport disconnected and returned HTTP `503` before
+installer construction. The same active checklist owns a three-attempt maximum
+for recognized transient bundler transport failures only; compilation,
+configuration, unknown, exhausted, or ordinary candidate failures remain
+single-attempt and fail closed. No mirror, alternate tool identity, signing,
+publication, credential, or release authority is added.
+Run `31641866471` then built and installed `dev.36`, proved exact installed
+identity/runtime, passed the five original scenarios, captured a screenshot,
+and cleaned up. Its sixth harness predicate waited on
+`projectRefreshSequence`, although real watcher refresh does not change that
+counter, so the artifact is rejected and Issue #33 remains open. `dev.37`
+instead observes reloaded content in a clean background document plus a higher
+project revision before asserting the active Monaco model, viewport, and cursor
+are unchanged. This evidence correction owns no product behavior, schema,
+persistence, signing, publication, credential, or candidate authority.
+Exact-main source run `31644418691` and installed run `31644429787` then passed
+at `7ab861b01a36313150988b1e2fa8fdc2056325d9`. The installed record proves all
+six scenarios, exact embedded identity/runtime, installer/executable/screenshot
+hashes, and fail-closed uninstall cleanup; artifact `9160516935` is the bounded
+evidence. Issue #33 closure is GO. This does not satisfy or authorize Windows
+signing, candidate construction, human installed-candidate acceptance, MAC5,
+publication, or updater mutation.
+
+RELEASE-NOTES-1 owns only the reviewed GitHub Release body source and its
+exact-commit stale guard. The exact-candidate checklist retains identity,
+artifact/evidence, installed acceptance, and GO/NO-GO authority; About/update
+V1 retains channel, schema, endpoint, summary projection, and Pages authority;
+Apple and Windows signing lanes retain installer trust. `NEWS.md` remains the
+installed-behavior ledger and cannot be replaced by curated release prose.
+
+The existing accepted `v0.4.0-dev.27` Draft predates the notes-file contract.
+Its release ID, tag, commit, and generic body form one explicit compatibility
+tuple. The implementation may validate that tuple during a later publication
+attempt but cannot add a historical file to its commit, rewrite its body,
+replace assets, or infer that any other missing file is legacy. Newly
+constructed candidates must carry `.github/release-notes/v<version>.md` in the
+exact source commit. The first canonical body line remains a bounded plain-text
+summary so the existing update-site projection does not gain a competing
+summary owner. Tauri updater/signing and Issue #26 Authenticode work remain
+separate.
+
+`active-2026-08-15-tauri-native-updater-spec.md` is the required separate
+contract for the native-updater work explicitly deferred by Issue #27 and the
+About/Update V1 design. It is not an amendment of Issue #27's candidate-site
+scope. The active package keeps V1 discovery as the manual-only channel/UI
+owner and uses distinct `/updates/tauri/{stable,development}.json` resources,
+so a Tauri-schema manifest cannot be misread as the existing schema-v1
+discovery manifest. It consumes the first bounded reviewed Release-body line
+from RELEASE-NOTES-1; it creates no second notes author.
+
+The cross-review resolved four implementation constraints that remain active
+acceptance gates:
+
+1. Windows final-byte order must remain `build -> SignPath Authenticode ->
+   final Tauri signature`; a pre-Authenticode updater signature is invalid.
+2. macOS must notarize/staple the application archive used by the native
+   updater, not merely the public DMG, before final Tauri signing. MAC4/MAC5
+   retain Developer ID, entitlement, notarization, and release acceptance
+   authority.
+3. Linux's active AppImage plan continues to reject automatic/native Linux
+   updates in this round. The shared plugin dependency must not create a Linux
+   endpoint, key exposure, or install path.
+4. The new private-key/password secrets may appear only in trusted candidate
+   jobs; Pages, public publication, source CI, fork rehearsal, and browser/mock
+   code receive neither. A fresh `dev.40` checklist must bind exact updater
+   assets, signatures, installed-update evidence, and GO/NO-GO separately from
+   `dev.39`'s historical conditional record.
+5. The plugin may parse a Rust-owned check result, but may not own an
+   unbounded download or destructive default install. Before shutdown, the
+   runtime must allowlist the final GitHub Release URL/redirect hosts, bound
+   bytes, and independently verify the configured public key. Windows exits
+   only after spawning the verified NSIS handoff; macOS stages and
+   code-signature-checks on the target volume, preserves the existing bundle,
+   and restores it if replacement or launch fails. Browser/mock mode may
+   demonstrate the state but must never claim installation.
+
 The active release checklist is the sole GO/NO-GO authority for the exact
 `0.2.0-dev.12` candidate. About/update V1 was implemented afterward and has its
 own Pages and installed-app gates. It cannot be included in, block, or validate
@@ -762,6 +975,43 @@ authority. MAC1 may select a platform-appropriate default directory only before
 the existing normalization and validation boundary. Jet and the current Ark
 session retain process-launch and watchdog authority; the macOS stream may add
 only the bounded fallback cleanup named in its active contract.
+
+### Internal extension runtime Phase 1
+
+The implemented Phase 1 architecture owns compiled-in first-party composition
+semantics above the Trusted Kernel: validated vocabulary, deterministic graph,
+host-owned scope/generation, expected-old publication, reversible effects,
+bounded brokers/diagnostics, and the fixed Run History, Workspace Snapshot, and
+Project File Viewer migrations. Capability provision does not imply permission:
+broker policy, approvals, credentials, processes, filesystem/network access,
+persistence, project identity, and audit remain outside the graph.
+
+BH1/BH2 retain authoritative project identity, transition sequencing, and
+recovery. ADR-002/ADR-003 retain transport authority. Store remains Run History
+authority; the Workspace broker/Ark and Agent lane remain Snapshot authorities;
+`read_viewer_file()` and the trusted shell retain viewer containment/rendering.
+The public Workbench Protocol proposal cannot infer a new external contract
+from this internal crate.
+
+The Rust MSRV contract owns Rust 1.88, Resolver 3, the committed lockfile, and
+all six macOS/Windows/Linux stable/MSRV legs. Implemented CI-FAST1 owns only
+their timing: Rust Fast is the Draft signal and all six legs are the affected
+Ready/`main` integration signal. Exact Ready run `32129767978` passed all six
+legs plus unsigned packaged candidate/legacy smoke on each stable platform.
+The AGPL transition contract retains source and third-party licensing.
+
+The reviewed dependency set is `petgraph 0.8` with only `std`, workspace
+`semver 1.x` with serde, `arc-swap 1.x`, direct `tokio-util 0.7` with only
+`rt`, and existing workspace serde/serde_json/thiserror/Tokio. `inventory`,
+dynamic loading, Wasm, direct `tracing`, and another runtime remain absent.
+
+PR #76 remains proposed and supplies no discovery/loading authority. Issues
+#95/#96 may reuse only typed capability, scope/generation, candidate, effect,
+quiesce/dispose, diagnostic, and bounded broker semantics. Execution Targets,
+runtime hosts, environments, jobs, attempts, scheduling, transport, schema,
+and UI remain separately owned. Candidate is the internal default;
+`RHO_INTERNAL_EXTENSION_RUNTIME=legacy` remains process-local for one later
+release cycle, and its deletion requires a new active contract.
 
 ### aisdk family work
 

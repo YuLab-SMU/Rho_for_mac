@@ -9,6 +9,7 @@
 .DS_Store
 *.log
 /desktop/resources/runtime/ark.exe
+/desktop/resources/runtime/ark
 /desktop/resources/runtime/LICENSE
 /desktop/resources/runtime/NOTICE
 /desktop/src-tauri/gen/
@@ -16,3 +17,4 @@
 .worktrees/
 /test/generated-manual-fixtures/
 test/environment-demo/renv
+.reasonix

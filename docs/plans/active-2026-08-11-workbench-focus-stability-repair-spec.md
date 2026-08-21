@@ -341,3 +341,192 @@ returns the source editor to its cursor/selection. The user accepted the local
 behavior for contribution on 2026-08-12. This is implementation evidence only,
 not a signed candidate or distribution acceptance; exact installed Windows
 acceptance remains open.
+
+## WINDOWS-INSTALLED-ISSUE33-A1 Closure Amendment
+
+Authorization: on 2026-08-12 the project owner instructed `尽快修复和关闭`
+after reviewing the still-open Windows acceptance gap.
+
+Change class: D4 exact-source installed acceptance tooling
+
+Risk: R4 installer identity, installed-process automation, and evidence/release
+boundary integrity
+
+The earlier wording coupled product-Issue closure to a future signed release
+candidate even though Windows signing is externally blocked by the separately
+owned Issue #26/SignPath process. That coupling did not add product coverage:
+it delayed the same six interaction checks until an unrelated release gate.
+This amendment separates the facts without weakening release admission.
+
+Issue #33 closure now requires an unsigned internal `0.4.0-dev.37` package
+built from exact protected `main`, silently installed in a clean hosted Windows
+profile, launched from its resolved install directory, and driven through a
+runner-only loopback WebView2 debugging port. The shipped Tauri page must prove
+its embedded version/commit and repeat the five original Issue scenarios plus
+EDITOR-VIEWPORT-R1. The exact workflow, identity, deterministic scenario,
+cleanup, screenshot, and JSON evidence requirements are owned by
+`docs/release/active-0.4.0-dev.37-candidate-checklist.md`.
+
+The installed automation may seed bounded Agent/Run presentation records to
+make polling and pointer timing deterministic, but it must use the shipped
+render/focus helpers, real Workspace R execution, real project watcher, real
+Monaco editor, and the installed Tauri bridge. Browser/mock mode, the build-
+tree executable, and source-only assertions cannot satisfy this gate. Any
+failed or incomplete scenario leaves the Issue open.
+
+Passing this exact-source installed check may close the reproduced product
+defect. It does not claim Authenticode, signed-candidate, broad human installed
+acceptance, MAC5, publication, or updater readiness. Those stricter release
+gates remain unchanged and must still be run against a future exact signed
+candidate.
+
+### Ark download recovery correction
+
+The first two exact-main acceptance attempts on 2026-08-12 both stopped before
+package construction when GitHub Release returned `503 Service Unavailable` to
+the pinned Windows Ark download. Neither attempt created an installer, so at
+that checkpoint the single-use `0.4.0-dev.34` artifact identity remained
+unconsumed. This is a D1
+release-tooling reliability defect inside the already authorized D4 work
+package; it changes no application bytes, runtime version, source behavior,
+credential authority, publication state, or release decision.
+
+Regression invariant: a transient or corrupt Ark response must never become
+the canonical archive. Bootstrap downloads to one explicit `.partial` path,
+verifies the pinned SHA-256 before promotion, and performs at most four attempts
+with bounded exponential delay. Each failed attempt removes only that explicit
+partial file; final failure remains visible and stops the workflow. A successful
+retry may continue the same pre-artifact acceptance run. The source contract
+must reject direct download into the canonical archive and unbounded retry.
+
+### NSIS tool download recovery correction
+
+Exact protected-main run `31638482434` reached a successful release build of
+`rho-desktop.exe` on both attempt 1 and attempt 2, but Tauri could not construct
+an installer because its official NSIS tool download first ended with
+`Peer disconnected` and then returned HTTP `503`. Neither attempt produced or
+uploaded an installer, installed Rho, or entered an interaction scenario, so
+the single-use `dev.36` artifact identity remains unconsumed. The failure is a
+D1 release-tooling reliability defect inside the authorized D4 work package;
+it changes no application bytes, dependency source, signing, credential,
+publication, or release authority.
+
+Regression invariant: only the dedicated Issue #33 workflow may request at
+most three Tauri build attempts. A retry is admitted only when the preceding
+command failed during bundling, no NSIS installer exists, the release
+executable exists, and captured output identifies a bounded transient transport
+class: HTTP 408/425/429/5xx, peer disconnect, connection reset/closure, request
+send failure, or timeout. Cached compilation may then be reused after a bounded
+delay. Compilation/configuration errors, an existing installer, an absent
+release executable, unknown failures, or exhausted attempts fail immediately
+and visibly. The generic build path and candidate workflow retain one attempt
+by default; no mirror, unpinned tool, or indefinite retry is permitted.
+
+### NSIS registry-path recovery correction
+
+After the Ark recovery merged, exact-main source run `31633585677` passed all
+four macOS/Windows stable/MSRV jobs at
+`d0d1d5813dde69199a3e9463eac53ca41812585a`. Installed run `31633600383`
+then built and uploaded the `0.4.0-dev.34` NSIS package, SHA-256
+`cc693a691e0c2da435824de272ac955af6fdeea5a5b844072f1a37fbea48b801`.
+NSIS installed successfully, but its registry `InstallLocation` contained
+balanced surrounding quotes. Both installed-byte resolution and fail-closed
+cleanup passed that raw value to `Join-Path`, which treated `"C` as a drive and
+stopped before any interaction scenario. The artifact-producing run rejects
+and consumes `dev.34`; no scenario, screenshot, installed identity, or cleanup
+PASS is claimed.
+
+The corrective D1/R3 workflow slice used fresh synchronized `0.4.0-dev.35`.
+Both the normal resolution path and the `always()` cleanup path remove exactly
+one balanced pair of surrounding quotes before path composition, then require
+a fully qualified path. Unquoted absolute paths remain compatible. Empty,
+partially quoted, or relative values fail visibly; the workflow does not guess
+an install root or weaken installed-versus-build-tree separation. Regression
+coverage rejects any direct `Join-Path $entry.InstallLocation` use and requires
+the same normalization in resolution and recovery. Application behavior,
+installer layout, registry ownership, signing, credentials, publication, and
+release authority do not change.
+
+### WebView2 browser-argument recovery correction
+
+Exact protected-main commit `ab2df2cb0dba37e91692d3f40abcf89085b3f67b`
+passed macOS/Windows stable/MSRV run `31635365392`. Installed run
+`31635375821` then built, installed, resolved, and started the `dev.35` package;
+the installed Ark runtime and exact executable were present, startup reached
+Workspace/project readiness, and the fail-closed uninstall path removed both
+the executable and registry entry. The workflow nevertheless timed out before
+all scenarios because port 9222 was unavailable.
+
+The defect is in acceptance admission rather than product focus behavior.
+Wry supplies `ICoreWebView2EnvironmentOptions::AdditionalBrowserArguments`
+explicitly, so its normal default argument string superseded the workflow's
+process-environment-only `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`. That
+artifact-producing failure consumes and rejects `dev.35`.
+
+The corrective D1/R3 slice uses fresh synchronized `0.4.0-dev.36` and Tauri's
+documented build `--config` merge mechanism. Only the dedicated Issue #33
+workflow passes a checked-in overlay that preserves the complete primary
+window configuration, repeats Wry's normal disabled-feature arguments, and
+adds a fixed port bound to `127.0.0.1`. The generic build script resolves the
+overlay as a repository-owned file and rejects a missing, non-file, or
+out-of-repository path. Ordinary candidate construction passes no overlay; the
+base Tauri configuration and public Windows package therefore gain no debug
+port. Static regression coverage enforces both the positive acceptance path
+and that negative production boundary before the installed workflow proves the
+real CDP session. No application behavior, schema, credentials, runtime,
+installer layout, publication, signing, or release authority changes.
+
+### Installed watcher-evidence correction
+
+Protected-main run `31641866471` at
+`4d687b2f8354f7af71fa52512111068c3ea5480e` constructed and installed the
+`dev.36` NSIS package. Embedded version/commit/platform, installed executable,
+Ark runtime, the five original Issue #33 scenarios, screenshot capture, and
+fail-closed cleanup all passed. `monaco_watcher_viewport` timed out because its
+harness waited for `state.projectRefreshSequence` to exceed the prepared
+value. That counter describes project hydration/lifecycle changes; the real
+watcher calls `refreshProject()`, which deliberately does not mutate it. The
+predicate therefore could not prove success even when a watcher refresh ran.
+The artifact-producing failure consumes and rejects `dev.36`.
+
+Fresh synchronized `dev.37` corrects the D1/R3 evidence harness without
+changing product behavior. Before the external write it opens `watch.md` as a
+clean background document while retaining `analysis.R` as the active Monaco
+model. After writing a unique marker, it waits for the shipped watcher path to
+reload that marker into `state.documents["watch.md"].savedContent` and advance
+the broker-owned project revision. Only then does it assert that `analysis.R`
+remains active and that Monaco scroll position, visible range, and cursor are
+unchanged. Regression coverage rejects the impossible
+`projectRefreshSequence` predicate. No mock/browser path, timing-only success,
+schema, persistence, credential, signing, publication, or release authority is
+added.
+
+### Exact installed acceptance result
+
+PR #61 integrated the corrected harness into protected `main` as
+`7ab861b01a36313150988b1e2fa8fdc2056325d9`. Exact-main source run
+`31644418691` passed all four macOS/Windows stable/MSRV jobs. Installed run
+`31644429787` then built `Rho_0.4.0-dev.37_x64-setup.exe`, silently installed
+it in a clean Windows profile, resolved and launched only
+`C:\Users\runneradmin\AppData\Local\Rho\rho-desktop.exe`, proved the embedded
+`0.4.0-dev.37`/commit/`windows-x86_64` identity and installed Ark runtime, and
+passed all six scenarios.
+
+The corrected `monaco_watcher_viewport` evidence shows project revision
+advancing from 3 to 4 after the unique `watch.md` marker was reloaded. The
+active document remained `analysis.R`; its visible start remained line 1 and
+its cursor remained line 242. The other five scenarios also report `PASS`.
+The installer SHA-256 is
+`a8fa9ad2628590c9c12e176f22930d971fd8d2572dc606b52b55e38abb41bda6`,
+installed executable SHA-256 is
+`69bc24e5190ecceebddd8b0d9ea0eaac7f4e33bfed6eda43ded30a262dd05376`,
+and screenshot SHA-256 is
+`3b36b5bc604f3fe16790146117d8e541e82e00ccbbe22110eb0baa2d72fa2faf`.
+Artifact `9160516935` preserves the bounded records. Cleanup exited 0 and
+verified removal of both installed executable and registry entry.
+
+WINDOWS-INSTALLED-ISSUE33-A1 is accepted and the reproduced product defect may
+close. The artifact remains an unsigned internal review package, not a release
+candidate. Authenticode, exact signed-candidate construction, broad human
+installed acceptance, MAC5, publication, and updater readiness remain open and
+cannot consume this product-Issue acceptance as their evidence.

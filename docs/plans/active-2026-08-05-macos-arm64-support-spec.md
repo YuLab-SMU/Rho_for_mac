@@ -177,12 +177,17 @@ Success requires all of the following facts to be recorded separately:
   release. No identity is hard-coded in the repository.
 - R support: retain the existing R 4.4 minimum and test the implementation-time
   current stable R as well. The first candidate accepts arm64 R only.
-- Updates: discovery and redirect only. No background installer download,
-  automatic replacement, delta update, or silent restart.
+- Updates: this MAC4/MAC5 package owns discovery and redirect only. No
+  background installer download, delta update, or silent restart is permitted
+  here. A later separately cross-reviewed native-updater contract may add an
+  explicit-user signed install/restart path only after it preserves Apple
+  signing, notarization, stapling, and exact-candidate acceptance.
 - No new public Workspace protocol, persistence schema, approval lane, shell
   execution authority, remote execution, or scientific behavior is introduced.
-- Linux, Intel macOS, App Store packaging, automatic update installation, and
-  executing user shell startup files are out of scope.
+- Linux, Intel macOS, App Store packaging, automatic update installation
+  **within this MAC package**, and executing user shell startup files are out
+  of scope. This does not authorize a native updater; the separately active
+  `2026-08-15-tauri-native-updater` contract must be activated first.
 
 ## Compatibility And Ownership
 
@@ -1862,3 +1867,15 @@ update schema, or MAC4/MAC5 authority. The active `dev.33` checklist owns every
 future source, candidate, installed, acceptance, MAC5, publication, and updater
 fact. A new candidate remains blocked until its exact source is integrated and
 passes the complete protected source gates.
+
+## `dev.39` Conditional Prerelease Cross-Review — 2026-08-13
+
+CPREL1 does not weaken MAC4 artifact construction: exact arm64 identity,
+Developer ID signing, entitlements, notarization binding, stapling, hosted
+Gatekeeper assessment, mounted Workspace smoke, hashes, and aggregate evidence
+remain mandatory. The owner's one-release conditional authorization applies
+only to enabled-Gatekeeper human launch on an available user Mac, which is
+recorded as `not_run` because local assessments are disabled. It is not a MAC5
+pass and cannot be reused by another version. The download page must expose
+that limitation while the update manifest retains its existing schema and
+exact macOS artifact hash.

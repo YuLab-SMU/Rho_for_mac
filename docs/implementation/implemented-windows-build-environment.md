@@ -2,7 +2,7 @@
 
 Status: implemented and actively maintained
 
-Date: 2026-08-10
+Date: 2026-08-13
 Validated release: `0.2.0-dev.11`
 
 Release automation for later candidates runs
@@ -268,8 +268,21 @@ The target machine must provide:
 Rho supports `RHO_RSCRIPT` for an explicit `Rscript.exe` when automatic R
 discovery cannot find the intended installation.
 
-The installer is currently unsigned. A SmartScreen unrecognized-publisher
-warning is expected and is not itself a build failure.
+The local installer builder and fork rehearsal artifact are unsigned. For the
+exact allowlisted upstream candidate (currently `0.4.0-dev.39`) only, the candidate workflow submits
+the final NSIS installer to the SignPath Free Trial test policy after build and
+smoke checks, verifies the expected self-signed test certificate, and hashes
+the returned bytes before evidence assembly. That signature is not publicly
+trusted or a SignPath Foundation production publisher; a Windows or SmartScreen
+warning remains expected and is not itself a build failure.
+
+`0.4.0-dev.39` is an evaluation-only conditional prerelease: Windows human
+installation is recorded as not run because no Windows device was available.
+That limitation does not weaken build, smoke, signing, request-binding, or
+final-hash evidence and must remain visible on the Release/download page.
+
+The legacy manual Windows publisher does not replace the cross-platform
+candidate/MAC5 path and cannot bypass its test-signing evidence gate.
 
 ## Manual GitHub Release Workflow
 
@@ -292,6 +305,14 @@ The workflow inputs are:
 - `prerelease`: whether the release should be published as a prerelease;
 - `run_smoke_test`: whether to run `target\release\rho-desktop.exe --smoke-test`
   before publishing.
+
+Before any hosted build begins, the workflow derives
+`.github/release-notes/<release_tag>.md` from the exact checked-out ref and
+validates it with `scripts/release-notes.mjs`. The file's canonical reviewed
+Markdown is the complete GitHub Release body; build paths, hashes, and smoke
+metadata remain in the release evidence/assets rather than being synthesized
+into a second body. A missing, mismatched, malformed, oversized, symlinked, or
+non-UTF-8 notes file fails before publication.
 
 Each run bootstraps Ark, builds the NSIS installer, computes a `.sha256` asset,
 optionally runs the non-Agent smoke test, creates or updates a GitHub Release,
@@ -390,4 +411,3 @@ An implementation agent handing work back for review must provide:
 - known limitations;
 - an explicit statement that no aisdk family repository was changed, or a
   separately approved explanation if it was.
-
